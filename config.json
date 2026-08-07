@@ -1,0 +1,9 @@
+{
+  "target_url": "https://opencode.ai/workspace/wrk_01KZAAHY6WJ07VWNP1G6SMA29X/usage",
+  "fetch_interval_minutes": 30,
+  "daily_budget_usd": 5.0,
+  "monthly_budget_usd": 60.0,
+  "alert_warning_ratio": 0.8,
+  "alert_critical_ratio": 1.0,
+  "headless": false
+}

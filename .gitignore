@@ -1,0 +1,7 @@
+*.db
+opencode_monitor.db
+user_data/
+__pycache__/
+.vscode/
+.idea/
+*.log

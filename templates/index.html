@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenCode 使用量监控与预算告警看板</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen">
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <!-- 头部标题 -->
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900 tracking-tight">OpenCode 使用量监控面板</h1>
+                <p class="text-sm text-gray-500 mt-1">实时追踪 Go 套餐 Token 消耗、成本计算与预算预警</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <button onclick="openConfigModal()" class="bg-gray-600 hover:bg-gray-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    预算设置
+                </button>
+                <button onclick="triggerCrawler()" id="btn-refresh" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    立即抓取同步
+                </button>
+                <a href="/api/export" download class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    一键导出 CSV
+                </a>
+            </div>
+        </div>
+
+        <!-- 告警提示栏 -->
+        <div id="alerts-container" class="mb-8 space-y-3 hidden"></div>
+
+        <!-- 核心统计指标卡片 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 relative">
+                <div class="flex justify-between items-center">
+                    <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">累计已用成本</div>
+                    <button onclick="openConfigModal()" title="修改预算设置" class="text-gray-400 hover:text-indigo-600 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                    </button>
+                </div>
+                <div class="text-2xl font-extrabold text-indigo-600 mt-2" id="stat-total-cost">$0.0000</div>
+                <div class="text-xs text-gray-500 mt-2" id="stat-budget-ratio">月度预算使用率: 0%</div>
+                <!-- 进度条 -->
+                <div class="w-full bg-gray-200 rounded-full h-1.5 mt-2">
+                    <div id="budget-progress-bar" class="bg-indigo-600 h-1.5 rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">输入 Token 总量</div>
+                <div class="text-2xl font-extrabold text-emerald-600 mt-2" id="stat-total-input">0</div>
+                <div class="text-xs text-gray-500 mt-2">Input Tokens</div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">输出 Token 总量</div>
+                <div class="text-2xl font-extrabold text-blue-600 mt-2" id="stat-total-output">0</div>
+                <div class="text-xs text-gray-500 mt-2">Output Tokens</div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">累计 Token 总量</div>
+                <div class="text-2xl font-extrabold text-teal-600 mt-2" id="stat-total-tokens">0</div>
+                <div class="text-xs text-gray-500 mt-2">Total Tokens</div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">总抓取记录数</div>
+                <div class="text-2xl font-extrabold text-purple-600 mt-2" id="stat-total-records">0</div>
+                <div class="text-xs text-gray-500 mt-2">使用记录条目</div>
+            </div>
+        </div>
+
+        <!-- 图表可视化区域 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 lg:col-span-2">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+                    <h3 class="text-base font-semibold text-gray-900" id="chart-title">时间与累计 Token 消耗分布</h3>
+
+                    <div class="flex items-center gap-3">
+                        <!-- 统计粒度选择按钮 -->
+                        <div class="inline-flex rounded-lg bg-gray-100 p-1 text-xs">
+                            <button onclick="setGranularity('hourly')" id="btn-gran-hourly" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
+                                每小时
+                            </button>
+                            <button onclick="setGranularity('daily')" id="btn-gran-daily" class="px-2.5 py-1 font-medium rounded-md bg-white text-indigo-600 shadow-sm transition">
+                                每日
+                            </button>
+                            <button onclick="setGranularity('weekly')" id="btn-gran-weekly" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
+                                每周
+                            </button>
+                        </div>
+
+                        <!-- 统计指标类型按钮 -->
+                        <div class="inline-flex rounded-lg bg-gray-100 p-1 text-xs">
+                            <button onclick="switchChartMode('tokens')" id="btn-chart-tokens" class="px-2.5 py-1 font-medium rounded-md bg-white text-teal-600 shadow-sm transition">
+                                Token 消耗
+                            </button>
+                            <button onclick="switchChartMode('cost')" id="btn-chart-cost" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
+                                成本 (USD)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="costChart"></canvas>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+                <h3 class="text-base font-semibold text-gray-900 mb-4">模型使用比例</h3>
+                <div class="relative h-64 flex justify-center items-center">
+                    <canvas id="modelChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- 详细数据表格 -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <h3 class="text-base font-semibold text-gray-900">使用量详细记录</h3>
+
+                <!-- 表格分页控制项 -->
+                <div class="flex items-center gap-4 text-xs text-gray-500">
+                    <div class="flex items-center gap-1.5">
+                        <span>每页显示:</span>
+                        <select id="pageSizeSelect" onchange="changePageSize(this.value)" class="border border-gray-200 rounded px-2 py-1 bg-white text-gray-700 focus:outline-none focus:border-indigo-500">
+                            <option value="10">10 条</option>
+                            <option value="20" selected>20 条</option>
+                            <option value="50">50 条</option>
+                        </select>
+                    </div>
+                    <span id="pageInfoText">显示 0 - 0 条，共 0 条</span>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-gray-600">
+                    <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                        <tr>
+                            <th class="px-6 py-3">时间</th>
+                            <th class="px-6 py-3">模型</th>
+                            <th class="px-6 py-3">输入 Token</th>
+                            <th class="px-6 py-3">输出 Token</th>
+                            <th class="px-6 py-3">估计成本 / 消耗</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body" class="divide-y divide-gray-100">
+                        <tr>
+                            <td colspan="5" class="px-6 py-8 text-center text-gray-400">加载数据中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 底部分页导航栏 -->
+            <div class="px-6 py-3 bg-gray-50 border-t border-gray-100 flex justify-between items-center text-xs">
+                <div class="text-gray-500">
+                    页码: <span id="currentPageNum" class="font-semibold text-gray-800">1</span> / <span id="totalPagesNum">1</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="prevPage()" id="btnPrevPage" class="px-3 py-1 bg-white border border-gray-200 rounded text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                        上一页
+                    </button>
+                    <button onclick="nextPage()" id="btnNextPage" class="px-3 py-1 bg-white border border-gray-200 rounded text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                        下一页
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 预算配置 Modal 弹窗 -->
+    <div id="configModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 relative">
+            <h3 class="text-lg font-bold text-gray-900 mb-4">修改预算设置</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">月度预算金额 (USD)</label>
+                    <input type="number" id="inputMonthlyBudget" step="1" min="1" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="例如: 60.0">
+                    <p class="text-xs text-gray-400 mt-1">设置每月最大额度，超过该额度触发 Critical 告警。</p>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">日度预算预警金额 (USD)</label>
+                    <input type="number" id="inputDailyBudget" step="0.5" min="0.5" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="例如: 5.0">
+                    <p class="text-xs text-gray-400 mt-1">设置单日预警限额。</p>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end gap-3">
+                <button onclick="closeConfigModal()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition">
+                    取消
+                </button>
+                <button onclick="saveConfig()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition">
+                    保存生效
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let costChartInstance = null;
+        let modelChartInstance = null;
+        let currentChartMode = 'tokens'; // 'tokens' 或 'cost'
+        let currentGranularity = 'daily'; // 'hourly', 'daily', 'weekly'
+        let cachedRecentLogs = [];
+        let currentConfig = { monthly_budget_usd: 60.0, daily_budget_usd: 5.0 };
+
+        // 分页状态
+        let currentPage = 1;
+        let pageSize = 20;
+
+        async function fetchAndRenderChart() {
+            try {
+                const res = await fetch(`/api/chart_data?granularity=${currentGranularity}`);
+                const chartData = await res.json();
+
+                const ctx = document.getElementById('costChart').getContext('2d');
+                if (costChartInstance) costChartInstance.destroy();
+
+                const isTokensMode = currentChartMode === 'tokens';
+                const labelTitle = isTokensMode ? '累计 Token 消耗' : '耗费成本 (USD)';
+                const dataValues = isTokensMode ? chartData.tokens_data : chartData.cost_data;
+                const strokeColor = isTokensMode ? '#0d9488' : '#4f46e5';
+                const fillColor = isTokensMode ? 'rgba(13, 148, 136, 0.08)' : 'rgba(79, 70, 229, 0.08)';
+
+                document.getElementById('chart-title').innerText = `时间与累计 ${labelTitle} 分布 (${granularityLabel(currentGranularity)})`;
+
+                costChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: chartData.labels,
+                        datasets: [{
+                            label: labelTitle,
+                            data: dataValues,
+                            borderColor: strokeColor,
+                            backgroundColor: fillColor,
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 3,
+                            pointHoverRadius: 5
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: true }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error("加载图表数据失败:", e);
+            }
+        }
+
+        function granularityLabel(gran) {
+            if (gran === 'hourly') return '按小时聚合';
+            if (gran === 'weekly') return '按每周聚合';
+            return '按每日聚合';
+        }
+
+        function setGranularity(gran) {
+            currentGranularity = gran;
+            ['hourly', 'daily', 'weekly'].forEach(g => {
+                const btn = document.getElementById(`btn-gran-${g}`);
+                if (g === gran) {
+                    btn.className = "px-2.5 py-1 font-medium rounded-md bg-white text-indigo-600 shadow-sm transition";
+                } else {
+                    btn.className = "px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition";
+                }
+            });
+            fetchAndRenderChart();
+        }
+
+        function switchChartMode(mode) {
+            currentChartMode = mode;
+            const btnCost = document.getElementById('btn-chart-cost');
+            const btnTokens = document.getElementById('btn-chart-tokens');
+
+            if (mode === 'cost') {
+                btnCost.className = "px-2.5 py-1 font-medium rounded-md bg-white text-indigo-600 shadow-sm transition";
+                btnTokens.className = "px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition";
+            } else {
+                btnTokens.className = "px-2.5 py-1 font-medium rounded-md bg-white text-teal-600 shadow-sm transition";
+                btnCost.className = "px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition";
+            }
+
+            fetchAndRenderChart();
+        }
+
+        // 分页渲染逻辑
+        function renderTablePage() {
+            const total = cachedRecentLogs.length;
+            const totalPages = Math.ceil(total / pageSize) || 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (currentPage < 1) currentPage = 1;
+
+            const startIdx = (currentPage - 1) * pageSize;
+            const endIdx = Math.min(startIdx + pageSize, total);
+            const pageData = cachedRecentLogs.slice(startIdx, endIdx);
+
+            const tBody = document.getElementById('table-body');
+            if (pageData.length === 0) {
+                tBody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-400">尚无使用记录，请点击上方“立即抓取同步”按键。</td></tr>';
+            } else {
+                tBody.innerHTML = pageData.map(row => `
+                    <tr class="hover:bg-gray-50 transition">
+                        <td class="px-6 py-4 font-mono text-xs text-gray-500">${row.record_time}</td>
+                        <td class="px-6 py-4 font-medium text-gray-900">${row.model}</td>
+                        <td class="px-6 py-4 font-mono text-emerald-600">${row.input_tokens.toLocaleString()}</td>
+                        <td class="px-6 py-4 font-mono text-blue-600">${row.output_tokens.toLocaleString()}</td>
+                        <td class="px-6 py-4 font-mono font-semibold text-indigo-600">${row.cost_str || ('$' + row.cost_usd.toFixed(4))}</td>
+                    </tr>
+                `).join('');
+            }
+
+            // 更新页码文字
+            document.getElementById('pageInfoText').innerText = total > 0
+                ? `显示第 ${startIdx + 1} - ${endIdx} 条，共 ${total} 条`
+                : '显示 0 - 0 条，共 0 条';
+            document.getElementById('currentPageNum').innerText = currentPage;
+            document.getElementById('totalPagesNum').innerText = totalPages;
+
+            document.getElementById('btnPrevPage').disabled = currentPage <= 1;
+            document.getElementById('btnNextPage').disabled = currentPage >= totalPages;
+        }
+
+        function changePageSize(val) {
+            pageSize = parseInt(val, 10);
+            currentPage = 1;
+            renderTablePage();
+        }
+
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderTablePage();
+            }
+        }
+
+        function nextPage() {
+            const totalPages = Math.ceil(cachedRecentLogs.length / pageSize);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderTablePage();
+            }
+        }
+
+        // Modal 弹窗控制
+        function openConfigModal() {
+            document.getElementById('inputMonthlyBudget').value = currentConfig.monthly_budget_usd || 60.0;
+            document.getElementById('inputDailyBudget').value = currentConfig.daily_budget_usd || 5.0;
+            document.getElementById('configModal').classList.remove('hidden');
+        }
+
+        function closeConfigModal() {
+            document.getElementById('configModal').classList.add('hidden');
+        }
+
+        async function saveConfig() {
+            const monthly = parseFloat(document.getElementById('inputMonthlyBudget').value);
+            const daily = parseFloat(document.getElementById('inputDailyBudget').value);
+
+            if (isNaN(monthly) || monthly <= 0) {
+                alert("请输入有效数字作为月度预算数额");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        monthly_budget_usd: monthly,
+                        daily_budget_usd: isNaN(daily) ? 5.0 : daily
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    closeConfigModal();
+                    await loadDashboardData();
+                } else {
+                    alert("保存失败: " + JSON.stringify(data));
+                }
+            } catch (err) {
+                alert("保存发生错误: " + err);
+            }
+        }
+
+        async function loadDashboardData() {
+            try {
+                const res = await fetch('/api/usage');
+                const data = await res.json();
+
+                const summary = data.summary;
+                const recentLogs = data.recent_logs;
+                const config = data.config;
+                const alerts = data.alerts;
+
+                cachedRecentLogs = recentLogs;
+                currentConfig = config;
+
+                // 1. 更新卡片
+                document.getElementById('stat-total-cost').innerText = `$${summary.total_cost.toFixed(4)}`;
+                document.getElementById('stat-total-input').innerText = summary.total_input.toLocaleString();
+                document.getElementById('stat-total-output').innerText = summary.total_output.toLocaleString();
+                document.getElementById('stat-total-tokens').innerText = (summary.total_tokens || (summary.total_input + summary.total_output)).toLocaleString();
+                document.getElementById('stat-total-records').innerText = summary.total_records.toLocaleString();
+
+                // 月度预算百分比
+                const monthlyBudget = config.monthly_budget_usd || 60.0;
+                const ratio = Math.min(100, (summary.total_cost / monthlyBudget) * 100).toFixed(1);
+                document.getElementById('stat-budget-ratio').innerText = `月度预算 ($${monthlyBudget.toFixed(1)}) 已用 ${ratio}%`;
+                const pBar = document.getElementById('budget-progress-bar');
+                pBar.style.width = `${ratio}%`;
+                if (ratio >= 100) {
+                    pBar.className = "bg-rose-600 h-1.5 rounded-full";
+                } else if (ratio >= 80) {
+                    pBar.className = "bg-amber-500 h-1.5 rounded-full";
+                } else {
+                    pBar.className = "bg-indigo-600 h-1.5 rounded-full";
+                }
+
+                // 2. 渲染告警提示
+                const alertsContainer = document.getElementById('alerts-container');
+                if (alerts && alerts.length > 0) {
+                    alertsContainer.classList.remove('hidden');
+                    alertsContainer.innerHTML = alerts.map(a => `
+                        <div class="p-4 rounded-lg border text-sm font-medium ${a.alert_type.includes('critical') ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-800'}">
+                            ${a.message} <span class="text-xs opacity-75 font-normal">(${a.created_at})</span>
+                        </div>
+                    `).join('');
+                } else {
+                    alertsContainer.classList.add('hidden');
+                }
+
+                // 3. 渲染带分页的表格
+                renderTablePage();
+
+                // 4. 绘制折线图
+                await fetchAndRenderChart();
+
+                // 5. 绘制饼图
+                const modelNames = summary.models.map(m => m.model);
+                const modelCounts = summary.models.map(m => m.count);
+
+                const ctxModel = document.getElementById('modelChart').getContext('2d');
+                if (modelChartInstance) modelChartInstance.destroy();
+                modelChartInstance = new Chart(ctxModel, {
+                    type: 'doughnut',
+                    data: {
+                        labels: modelNames,
+                        datasets: [{
+                            data: modelCounts,
+                            backgroundColor: ['#4f46e5', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899']
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false }
+                });
+
+            } catch (err) {
+                console.error("加载 Dashboard 失败:", err);
+            }
+        }
+
+        async function triggerCrawler() {
+            const btn = document.getElementById('btn-refresh');
+            btn.disabled = true;
+            btn.innerHTML = `
+                <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                正在抓取同步...
+            `;
+            try {
+                await fetch('/api/sync', { method: 'POST' });
+                await loadDashboardData();
+            } catch (e) {
+                alert('同步失败: ' + e);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    立即抓取同步
+                `;
+            }
+        }
+
+        // 页面初始化时加载
+        loadDashboardData();
+    </script>
+</body>
+</html>
