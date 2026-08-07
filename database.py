@@ -46,6 +46,15 @@ def init_db():
     conn.commit()
     conn.close()
 
+def get_existing_hashes() -> set:
+    """获取数据库中已存在的所有记录 hash"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT row_hash FROM usage_logs")
+    rows = cursor.fetchall()
+    conn.close()
+    return {r["row_hash"] for r in rows}
+
 def generate_hash(record_time: str, model: str, input_tokens: int, output_tokens: int, cost_str: str) -> str:
     raw = f"{record_time}_{model}_{input_tokens}_{output_tokens}_{cost_str}"
     return hashlib.md5(raw.encode('utf-8')).hexdigest()

@@ -27,6 +27,9 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
     target_url = config.get("target_url")
     headless = config.get("headless", False)
 
+    existing_hashes = database.get_existing_hashes()
+    print(f"[Crawler] 数据库中已有 {len(existing_hashes)} 条 Hash 记录，启动增量抓取模式...")
+
     records = []
 
     with sync_playwright() as p:
@@ -93,28 +96,54 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
                     })
             return page_records
 
-        # 循环翻页与全量解析
+        # 循环翻页与解析
         max_pages = 100
         current_page_num = 1
+        consecutive_duplicate_pages = 0
 
         while current_page_num <= max_pages:
             print(f"[Crawler] 正在解析第 {current_page_num} 页 DOM 数据...")
             dom_records = parse_current_page_dom()
 
-            # 将当前页的记录去重合并到全局列表
+            # 如果当前页解析出的数据条目为 0（如已到没有数据空白页）
+            if not dom_records:
+                print(f"[Crawler] 第 {current_page_num} 页数据为空，停止继续翻页。")
+                break
+
+            # 检查当前页有多少条是数据库中已存在的记录
+            page_hashes = [
+                database.generate_hash(
+                    r["record_time"], r["model"], r["input_tokens"], r["output_tokens"], r["cost_str"]
+                ) for r in dom_records
+            ]
+
+            all_exist_in_db = len(page_hashes) > 0 and all(h in existing_hashes for h in page_hashes)
+
             added_this_page = 0
             for r in dom_records:
-                if not any(existing.get("record_time") == r.get("record_time") and existing.get("input_tokens") == r.get("input_tokens") and existing.get("cost_str") == r.get("cost_str") for existing in records):
-                    records.append(r)
-                    added_this_page += 1
+                h = database.generate_hash(
+                    r["record_time"], r["model"], r["input_tokens"], r["output_tokens"], r["cost_str"]
+                )
+                if h not in existing_hashes:
+                    if not any(existing.get("record_time") == r.get("record_time") and existing.get("input_tokens") == r.get("input_tokens") and existing.get("cost_str") == r.get("cost_str") for existing in records):
+                        records.append(r)
+                        added_this_page += 1
 
-            print(f"[Crawler] 第 {current_page_num} 页解析完成，新增 {added_this_page} 条使用记录")
+            print(f"[Crawler] 第 {current_page_num} 页解析完成，新增 {added_this_page} 条新使用记录")
+
+            # 增量抓取判定：如果该页所有记录均已在数据库中，说明之后的历史页码也已抓取过
+            if all_exist_in_db:
+                consecutive_duplicate_pages += 1
+                if consecutive_duplicate_pages >= 1:
+                    print(f"[Crawler] 第 {current_page_num} 页所有记录均已存在于数据库中，增量同步完成，提前停止后续翻页！")
+                    break
+            else:
+                consecutive_duplicate_pages = 0
 
             # 查找分页器“下一页”按钮
             btns = page.query_selector_all("button")
             next_btn = None
             if len(btns) >= 2:
-                # 倒数第 2 个通常为 > 按钮，倒数第 1 个是语言切换框
                 candidate = btns[-2]
                 is_disabled = candidate.evaluate("el => el.disabled")
                 if not is_disabled:
@@ -122,7 +151,6 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
 
             if next_btn:
                 try:
-                    # 先将按钮滚动到可视区域内
                     next_btn.scroll_into_view_if_needed()
                     time.sleep(0.5)
 
@@ -146,7 +174,7 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
                     print(f"[Crawler] 翻页点击过程结束或出现阻碍: {e}")
                     break
             else:
-                print("[Crawler] “下一页”按钮已被禁用，已成功抓取完全部历史页面。")
+                print("[Crawler] “下一页”按钮已被禁用或未找到，停止翻页。")
                 break
 
         browser_context.close()
