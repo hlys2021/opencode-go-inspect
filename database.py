@@ -1,6 +1,7 @@
 import sqlite3
 import hashlib
 import os
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -160,6 +161,16 @@ def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
     labels = list(aggregated.keys())
     tokens_data = [aggregated[k]["tokens"] for k in labels]
     cost_data = [round(aggregated[k]["cost"], 4) for k in labels]
+
+    # 对标签进行正向排序，保证按时间从远到近展示
+    combined = sorted(zip(labels, tokens_data, cost_data), key=lambda x: x[0])
+    if combined:
+        labels, tokens_data, cost_data = zip(*combined)
+        labels = list(labels)
+        tokens_data = list(tokens_data)
+        cost_data = list(cost_data)
+    else:
+        labels, tokens_data, cost_data = [], [], []
 
     return {
         "labels": labels,
