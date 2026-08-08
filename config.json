@@ -5,5 +5,5 @@
   "monthly_budget_usd": 65.0,
   "alert_warning_ratio": 0.8,
   "alert_critical_ratio": 1.0,
-  "headless": false
+  "headless": true
 }
