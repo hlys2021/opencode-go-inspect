@@ -12,6 +12,40 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def parse_to_standard_time(rec_time: str, default_year: int = 2026) -> str:
+    """
+    将中文时间字符串（如 '8月8日 上午12:08'）转换为可精准排序的标准 ISO 时间（如 '2026-08-08 00:08:00'）
+    规则：
+    - '上午12:xx' -> 00:xx (凌晨)
+    - '上午01:xx'~'上午11:xx' -> 01:xx~11:xx
+    - '下午12:xx' -> 12:xx (中午)
+    - '下午01:xx'~'下午11:xx' -> 13:xx~23:xx
+    """
+    if not rec_time:
+        return ""
+
+    match = re.search(r"(\d+)月(\d+)日(?:\s+(上午|下午)(\d+):(\d+))?", rec_time)
+    if not match:
+        return rec_time
+
+    month = int(match.group(1))
+    day = int(match.group(2))
+    ampm = match.group(3)
+    hour_str = match.group(4)
+    minute_str = match.group(5)
+
+    hour = 0
+    minute = 0
+    if hour_str and minute_str:
+        h = int(hour_str)
+        minute = int(minute_str)
+        if ampm == "下午":
+            hour = h if h == 12 else h + 12
+        elif ampm == "上午":
+            hour = 0 if h == 12 else h
+
+    return f"{default_year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:00"
+
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -22,6 +56,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         row_hash TEXT UNIQUE NOT NULL,
         record_time TEXT NOT NULL,
+        parsed_time TEXT,
         model TEXT NOT NULL,
         input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0,
@@ -31,6 +66,21 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    # 兼容老表补全 parsed_time 字段
+    cursor.execute("PRAGMA table_info(usage_logs)")
+    columns = [row["name"] for row in cursor.fetchall()]
+    if "parsed_time" not in columns:
+        cursor.execute("ALTER TABLE usage_logs ADD COLUMN parsed_time TEXT")
+
+    # 补全旧记录中 parsed_time 为 NULL 的数据
+    cursor.execute("SELECT id, record_time FROM usage_logs WHERE parsed_time IS NULL OR parsed_time = ''")
+    unparsed_rows = cursor.fetchall()
+    if unparsed_rows:
+        for r in unparsed_rows:
+            p_time = parse_to_standard_time(r["record_time"])
+            cursor.execute("UPDATE usage_logs SET parsed_time = ? WHERE id = ?", (p_time, r["id"]))
+        conn.commit()
 
     # 2. 创建预算告警历史表
     cursor.execute("""
@@ -74,13 +124,17 @@ def insert_usage_records(records: List[Dict[str, Any]]) -> int:
             r.get("output_tokens", 0),
             r.get("cost_str", "")
         )
+        rec_time = r.get("record_time", "")
+        p_time = parse_to_standard_time(rec_time)
+
         try:
             cursor.execute("""
-                INSERT INTO usage_logs (row_hash, record_time, model, input_tokens, output_tokens, cost_str, cost_usd, session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO usage_logs (row_hash, record_time, parsed_time, model, input_tokens, output_tokens, cost_str, cost_usd, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 h,
-                r.get("record_time", ""),
+                rec_time,
+                p_time,
                 r.get("model", ""),
                 r.get("input_tokens", 0),
                 r.get("output_tokens", 0),
@@ -98,9 +152,10 @@ def insert_usage_records(records: List[Dict[str, Any]]) -> int:
     return inserted_count
 
 def get_recent_usage(limit: int = 10000) -> List[Dict[str, Any]]:
+    """按标准化真实时间倒序查询最新的使用记录"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM usage_logs ORDER BY id DESC LIMIT ?", (limit,))
+    cursor.execute("SELECT * FROM usage_logs ORDER BY parsed_time DESC, id DESC LIMIT ?", (limit,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -111,46 +166,33 @@ def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT record_time, input_tokens, output_tokens, cost_usd FROM usage_logs ORDER BY id ASC")
+    cursor.execute("SELECT record_time, parsed_time, input_tokens, output_tokens, cost_usd FROM usage_logs ORDER BY parsed_time ASC, id ASC")
     rows = cursor.fetchall()
     conn.close()
 
     aggregated = {}
 
     for r in rows:
-        rec_time = r["record_time"] # 格式如 "8月7日 下午5:38" 或 ISO
+        p_time = r["parsed_time"] or parse_to_standard_time(r["record_time"])
         total_tok = (r["input_tokens"] or 0) + (r["output_tokens"] or 0)
         cost = r["cost_usd"] or 0.0
 
-        # 解析时间分组键
+        # 从标准时间 YYYY-MM-DD HH:MM:SS 中提取 key
         key = "未知时间"
-        match = re.search(r"(\d+)月(\d+)日(?:\s+(上午|下午)(\d+):(\d+))?", rec_time)
-        if match:
-            month = int(match.group(1))
-            day = int(match.group(2))
-            ampm = match.group(3)
-            hour_str = match.group(4)
+        if p_time and len(p_time) >= 16:
+            month_day = p_time[5:10] # MM-DD
+            hour = p_time[11:13]     # HH
+            day_num = int(p_time[8:10])
 
-            hour = 0
-            if hour_str:
-                hour = int(hour_str)
-                if ampm == "下午" and hour < 12:
-                    hour += 12
-                elif ampm == "上午" and hour == 12:
-                    hour = 0
-
-            # 生成规范化标准 Key
             if granularity == "hourly":
-                key = f"{month:02d}-{day:02d} {hour:02d}:00"
+                key = f"{month_day} {hour}:00"
             elif granularity == "weekly":
-                # 按月与周分组
-                week_num = (day - 1) // 7 + 1
-                key = f"{month:02d}月第{week_num}周"
+                week_num = (day_num - 1) // 7 + 1
+                key = f"{p_time[5:7]}月第{week_num}周"
             else:  # daily
-                key = f"{month:02d}-{day:02d}"
+                key = month_day
         else:
-            # 如果已有 ISO 类似前缀格式
-            key = rec_time[:10]
+            key = r["record_time"][:10]
 
         if key not in aggregated:
             aggregated[key] = {"tokens": 0, "cost": 0.0, "count": 0}
@@ -161,16 +203,6 @@ def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
     labels = list(aggregated.keys())
     tokens_data = [aggregated[k]["tokens"] for k in labels]
     cost_data = [round(aggregated[k]["cost"], 4) for k in labels]
-
-    # 对标签进行正向排序，保证按时间从远到近展示
-    combined = sorted(zip(labels, tokens_data, cost_data), key=lambda x: x[0])
-    if combined:
-        labels, tokens_data, cost_data = zip(*combined)
-        labels = list(labels)
-        tokens_data = list(tokens_data)
-        cost_data = list(cost_data)
-    else:
-        labels, tokens_data, cost_data = [], [], []
 
     return {
         "labels": labels,
@@ -240,4 +272,4 @@ def get_recent_alerts(limit: int = 20) -> List[Dict[str, Any]]:
 
 if __name__ == "__main__":
     init_db()
-    print("SQLite 数据库初始化完成:", DB_PATH)
+    print("SQLite 数据库初始化与字段修复完成:", DB_PATH)
