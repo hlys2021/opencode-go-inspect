@@ -2,6 +2,8 @@ import os
 import io
 import json
 import pandas as pd
+import sys
+import subprocess
 from typing import Dict, Any
 from fastapi import FastAPI, BackgroundTasks, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -83,7 +85,8 @@ def trigger_sync(background_tasks: BackgroundTasks):
         return {"status": "busy", "message": "已有一个抓取任务在后台运行中..."}
 
     def do_sync():
-        crawler.run_crawler_job()
+        crawler_script = os.path.join(os.path.dirname(__file__), "crawler.py")
+        subprocess.run([sys.executable, crawler_script])
         alert_engine.check_budget_alerts()
 
     background_tasks.add_task(do_sync)

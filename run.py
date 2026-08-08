@@ -1,5 +1,8 @@
+import os
+import sys
 import time
 import threading
+import subprocess
 import uvicorn
 import database
 import crawler
@@ -9,15 +12,16 @@ from app import app
 def scheduler_thread():
     print("[Scheduler] 启动后台定时抓取线程...")
     database.init_db()
-    # 先等待主服务和端口启动完成，再延迟 5 秒开始首次抓取，避开多线程竞争冲突
+    # 先等待主服务和端口启动完成，再延迟 5 秒开始首次抓取
     time.sleep(5)
     while True:
         try:
             config = crawler.load_config()
             interval_min = config.get("fetch_interval_minutes", 30)
 
-            print("[Scheduler] 正在执行周期性数据抓取与告警检查...")
-            crawler.run_crawler_job()
+            print("[Scheduler] 正在通过独立子进程执行周期性数据抓取...")
+            crawler_script = os.path.join(os.path.dirname(__file__), "crawler.py")
+            subprocess.run([sys.executable, crawler_script])
             alert_engine.check_budget_alerts()
 
             print(f"[Scheduler] 完成抓取，等待 {interval_min} 分钟后进行下一次检查...")

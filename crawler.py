@@ -8,21 +8,35 @@ from playwright.sync_api import sync_playwright
 import database
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
-
-# 抓取状态跟踪全局字典
-CRAWLER_STATUS = {
-    "is_crawling": False,
-    "last_sync_time": "",
-    "last_inserted_count": 0,
-    "last_error": ""
-}
-
-def get_crawler_status() -> Dict[str, Any]:
-    return CRAWLER_STATUS
+STATUS_PATH = os.path.join(os.path.dirname(__file__), "crawler_status.json")
 
 def load_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+def get_crawler_status() -> Dict[str, Any]:
+    default_status = {
+        "is_crawling": False,
+        "last_sync_time": "",
+        "last_inserted_count": 0,
+        "last_error": ""
+    }
+    if not os.path.exists(STATUS_PATH):
+        return default_status
+    try:
+        with open(STATUS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default_status
+
+def update_crawler_status(status_dict: Dict[str, Any]):
+    current = get_crawler_status()
+    current.update(status_dict)
+    try:
+        with open(STATUS_PATH, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Crawler Status] 保存状态文件失败: {e}")
 
 def parse_cost_to_usd(cost_str: str) -> float:
     """提取成本字符串中的数值，如 Go ($0.0016) -> 0.0016"""
@@ -37,7 +51,7 @@ def parse_cost_to_usd(cost_str: str) -> float:
 def fetch_opencode_usage() -> List[Dict[str, Any]]:
     config = load_config()
     target_url = config.get("target_url")
-    headless = config.get("headless", False)
+    headless = config.get("headless", True)
 
     existing_hashes = database.get_existing_hashes()
     print(f"[Crawler] 数据库中已有 {len(existing_hashes)} 条 Hash 记录，启动增量抓取模式...")
@@ -60,11 +74,10 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
         # 检查是否需要用户手工登录
         if "login" in page.url or "auth" in page.url or page.locator("input[type='password']").count() > 0:
             print("\n" + "="*50)
-            print("⚠️ 检测到需要登录！请在弹出的浏览器窗口中完成 OpenCode 账号登录。")
-            print("登录完成后脚本将自动继续抓取...")
+            print("⚠️ 检测到需要登录！请在 config.json 中调整 headless: false 并在窗口中完成登录。")
             print("="*50 + "\n")
             try:
-                page.wait_for_url(lambda u: "usage" in u or "workspace" in u, timeout=120000)
+                page.wait_for_url(lambda u: "usage" in u or "workspace" in u, timeout=60000)
                 print("✅ 登录成功！")
             except Exception as login_err:
                 print(f"⚠️ 等待登录超时或跳过: {login_err}")
@@ -117,12 +130,10 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
             print(f"[Crawler] 正在解析第 {current_page_num} 页 DOM 数据...")
             dom_records = parse_current_page_dom()
 
-            # 如果当前页解析出的数据条目为 0（如已到没有数据空白页）
             if not dom_records:
                 print(f"[Crawler] 第 {current_page_num} 页数据为空，停止继续翻页。")
                 break
 
-            # 检查当前页有多少条是数据库中已存在的记录
             page_hashes = [
                 database.generate_hash(
                     r["record_time"], r["model"], r["input_tokens"], r["output_tokens"], r["cost_str"]
@@ -141,9 +152,8 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
                         records.append(r)
                         added_this_page += 1
 
-            print(f"[Crawler] 第 {current_page_num} 页解析完成，新增 {added_this_page} 条新使用记录")
+            print(f"[Crawler] 第 {current_page_num} 页解析完成，新增 {added_this_page} 条使用记录")
 
-            # 增量抓取判定：如果该页所有记录均已在数据库中，说明之后的历史页码也已抓取过
             if all_exist_in_db:
                 consecutive_duplicate_pages += 1
                 if consecutive_duplicate_pages >= 1:
@@ -152,7 +162,6 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
             else:
                 consecutive_duplicate_pages = 0
 
-            # 查找分页器“下一页”按钮
             btns = page.query_selector_all("button")
             next_btn = None
             if len(btns) >= 2:
@@ -176,7 +185,6 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
                     first_cell_after = page.query_selector("td")
                     time_after = first_cell_after.inner_text().strip() if first_cell_after else ""
 
-                    # 如果点击后第一行的单元格内容完全未发生改变，说明已到末页
                     if time_before and time_before == time_after:
                         print("[Crawler] 点击后第一行数据没有发生变化，已到达最后一页。")
                         break
@@ -195,16 +203,17 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
     return records
 
 def run_crawler_job():
-    global CRAWLER_STATUS
-
-    if CRAWLER_STATUS["is_crawling"]:
+    status = get_crawler_status()
+    if status.get("is_crawling"):
         print("[Crawler Job] 上一次抓取任务仍在运行中，本次触发跳过。")
         return
 
-    CRAWLER_STATUS["is_crawling"] = True
-    CRAWLER_STATUS["last_error"] = ""
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    CRAWLER_STATUS["last_sync_time"] = start_time
+    update_crawler_status({
+        "is_crawling": True,
+        "last_sync_time": start_time,
+        "last_error": ""
+    })
 
     database.init_db()
     print(f"[Crawler Job] [{start_time}] 开始抓取 OpenCode 使用量...")
@@ -213,13 +222,18 @@ def run_crawler_job():
         print(f"[Crawler Job] 共解析出 {len(records)} 条历史使用记录")
         inserted = database.insert_usage_records(records)
         print(f"[Crawler Job] 成功新增/增量更新 {inserted} 条记录到 SQLite 数据库")
-        CRAWLER_STATUS["last_inserted_count"] = inserted
+        update_crawler_status({
+            "is_crawling": False,
+            "last_inserted_count": inserted,
+            "last_error": ""
+        })
     except Exception as e:
         err_msg = str(e)
         print(f"[Crawler Job] 抓取出现错误: {err_msg}")
-        CRAWLER_STATUS["last_error"] = err_msg
-    finally:
-        CRAWLER_STATUS["is_crawling"] = False
+        update_crawler_status({
+            "is_crawling": False,
+            "last_error": err_msg
+        })
 
 if __name__ == "__main__":
     run_crawler_job()
