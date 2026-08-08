@@ -218,7 +218,7 @@
 
         async function fetchAndRenderChart() {
             try {
-                const res = await fetch(`/api/chart_data?granularity=${currentGranularity}`);
+                const res = await fetch(`/api/chart_data?granularity=${currentGranularity}&_t=${Date.now()}`);
                 const chartData = await res.json();
 
                 const ctx = document.getElementById('costChart').getContext('2d');
@@ -401,7 +401,7 @@
 
         async function loadDashboardData() {
             try {
-                const res = await fetch('/api/usage');
+                const res = await fetch(`/api/usage?_t=${Date.now()}`);
                 const data = await res.json();
 
                 const summary = data.summary;
@@ -489,7 +489,7 @@
 
             pollingTimer = setInterval(async () => {
                 try {
-                    const res = await fetch('/api/sync_status');
+                    const res = await fetch(`/api/sync_status?_t=${Date.now()}`);
                     const status = await res.json();
 
                     if (!status.is_crawling) {
