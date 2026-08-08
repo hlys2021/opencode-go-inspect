@@ -3,10 +3,22 @@ import json
 import re
 import time
 from typing import List, Dict, Any
+from datetime import datetime
 from playwright.sync_api import sync_playwright
 import database
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+# 抓取状态跟踪全局字典
+CRAWLER_STATUS = {
+    "is_crawling": False,
+    "last_sync_time": "",
+    "last_inserted_count": 0,
+    "last_error": ""
+}
+
+def get_crawler_status() -> Dict[str, Any]:
+    return CRAWLER_STATUS
 
 def load_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -183,15 +195,31 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
     return records
 
 def run_crawler_job():
+    global CRAWLER_STATUS
+
+    if CRAWLER_STATUS["is_crawling"]:
+        print("[Crawler Job] 上一次抓取任务仍在运行中，本次触发跳过。")
+        return
+
+    CRAWLER_STATUS["is_crawling"] = True
+    CRAWLER_STATUS["last_error"] = ""
+    start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    CRAWLER_STATUS["last_sync_time"] = start_time
+
     database.init_db()
-    print("[Crawler Job] 开始全面全量抓取 OpenCode 使用量...")
+    print(f"[Crawler Job] [{start_time}] 开始抓取 OpenCode 使用量...")
     try:
         records = fetch_opencode_usage()
-        print(f"[Crawler Job] 共解析出 {len(records)} 条全量历史使用记录")
+        print(f"[Crawler Job] 共解析出 {len(records)} 条历史使用记录")
         inserted = database.insert_usage_records(records)
         print(f"[Crawler Job] 成功新增/增量更新 {inserted} 条记录到 SQLite 数据库")
+        CRAWLER_STATUS["last_inserted_count"] = inserted
     except Exception as e:
-        print(f"[Crawler Job] 抓取出现错误: {e}")
+        err_msg = str(e)
+        print(f"[Crawler Job] 抓取出现错误: {err_msg}")
+        CRAWLER_STATUS["last_error"] = err_msg
+    finally:
+        CRAWLER_STATUS["is_crawling"] = False
 
 if __name__ == "__main__":
     run_crawler_job()

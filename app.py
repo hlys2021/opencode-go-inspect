@@ -61,9 +61,18 @@ def update_config(data: Dict[str, Any]):
     alert_engine.check_budget_alerts()
     return {"status": "ok", "config": current_config}
 
+@app.get("/api/sync_status")
+def get_sync_status():
+    """获取抓取同步运行状态"""
+    return crawler.get_crawler_status()
+
 @app.post("/api/sync")
 def trigger_sync(background_tasks: BackgroundTasks):
     """手动触发后台抓取"""
+    status = crawler.get_crawler_status()
+    if status.get("is_crawling"):
+        return {"status": "busy", "message": "已有一个抓取任务在后台运行中..."}
+
     def do_sync():
         crawler.run_crawler_job()
         alert_engine.check_budget_alerts()
