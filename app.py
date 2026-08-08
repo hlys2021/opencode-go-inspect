@@ -4,9 +4,10 @@ import json
 import pandas as pd
 import sys
 import subprocess
+from contextlib import asynccontextmanager
 from typing import Dict, Any
 from fastapi import FastAPI, BackgroundTasks, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 
@@ -14,7 +15,26 @@ import database
 import crawler
 import alert_engine
 
-app = FastAPI(title="OpenCode Usage Monitor & Budget Alert")
+DEFAULT_SERVER_HOST = "127.0.0.1"
+DEFAULT_SERVER_PORT = 18088
+
+def get_server_port() -> int:
+    """读取 Web 服务端口，避开 Windows 常见系统排除端口范围。"""
+    raw_port = os.environ.get("OPENCODE_MONITOR_PORT", str(DEFAULT_SERVER_PORT)).strip()
+    try:
+        port = int(raw_port)
+    except ValueError as exc:
+        raise ValueError("OPENCODE_MONITOR_PORT 必须是 1-65535 之间的整数") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError("OPENCODE_MONITOR_PORT 必须是 1-65535 之间的整数")
+    return port
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    database.init_db()
+    yield
+
+app = FastAPI(title="OpenCode Usage Monitor & Budget Alert", lifespan=lifespan)
 
 @app.middleware("http")
 async def add_no_cache_header(request: Request, call_next):
@@ -28,23 +48,23 @@ async def add_no_cache_header(request: Request, call_next):
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-@app.on_event("startup")
-def startup_event():
-    database.init_db()
-
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
 
 @app.get("/api/usage")
-def get_usage_data():
+def get_usage_data(page: int = 1, page_size: int = 20):
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
     summary = database.get_usage_summary()
-    recent_logs = database.get_recent_usage(limit=10000)
+    recent_logs = database.get_recent_usage(limit=page_size, offset=(page - 1) * page_size)
+    total_count = database.get_usage_count()
     config = alert_engine.load_config()
     alerts = database.get_recent_alerts(limit=5)
     return {
         "summary": summary,
         "recent_logs": recent_logs,
+        "total_count": total_count,
         "config": config,
         "alerts": alerts
     }
@@ -60,10 +80,22 @@ def update_config(data: Dict[str, Any]):
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     current_config = alert_engine.load_config()
 
-    if "monthly_budget_usd" in data:
-        current_config["monthly_budget_usd"] = float(data["monthly_budget_usd"])
-    if "daily_budget_usd" in data:
-        current_config["daily_budget_usd"] = float(data["daily_budget_usd"])
+    try:
+        if "monthly_budget_usd" in data:
+            value = float(data["monthly_budget_usd"])
+            if value <= 0:
+                raise ValueError("monthly budget must be positive")
+            current_config["monthly_budget_usd"] = value
+        if "daily_budget_usd" in data:
+            value = float(data["daily_budget_usd"])
+            if value <= 0:
+                raise ValueError("daily budget must be positive")
+            current_config["daily_budget_usd"] = value
+    except (TypeError, ValueError):
+        return JSONResponse(
+            {"status": "error", "message": "预算金额必须是大于 0 的数字"},
+            status_code=400,
+        )
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(current_config, f, indent=2, ensure_ascii=False)
@@ -80,6 +112,7 @@ def get_sync_status():
 @app.post("/api/sync")
 def trigger_sync(background_tasks: BackgroundTasks):
     """手动触发后台抓取"""
+    crawler.clear_stale_lock()
     status = crawler.get_crawler_status()
     if status.get("is_crawling"):
         return {"status": "busy", "message": "已有一个抓取任务在后台运行中..."}
@@ -95,7 +128,7 @@ def trigger_sync(background_tasks: BackgroundTasks):
 @app.get("/api/export")
 def export_csv():
     """生成带有 UTF-8 BOM 的 CSV 导出文件"""
-    records = database.get_recent_usage(limit=10000)
+    records = database.get_all_usage()
     if not records:
         return Response("记录为空", media_type="text/plain")
 
@@ -133,4 +166,4 @@ def export_csv():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8088)
+    uvicorn.run(app, host=DEFAULT_SERVER_HOST, port=get_server_port())

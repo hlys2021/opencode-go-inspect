@@ -2,13 +2,14 @@ import os
 import json
 import re
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 import database
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 STATUS_PATH = os.path.join(os.path.dirname(__file__), "crawler_status.json")
+STALE_LOCK_TIMEOUT_SECONDS = 90 * 60
 
 def load_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -19,15 +20,52 @@ def get_crawler_status() -> Dict[str, Any]:
         "is_crawling": False,
         "last_sync_time": "",
         "last_inserted_count": 0,
-        "last_error": ""
+        "last_error": "",
+        "started_at": ""
     }
     if not os.path.exists(STATUS_PATH):
         return default_status
     try:
         with open(STATUS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            status = json.load(f)
     except Exception:
         return default_status
+    # 状态锁超时未复位视为陈旧锁，按未在抓取处理
+    if status.get("is_crawling") and not _lock_is_fresh(status.get("started_at", "")):
+        status["is_crawling"] = False
+        status["is_stale_lock"] = True
+    return status
+
+def _parse_status_time(time_str: str) -> Optional[datetime]:
+    if not time_str:
+        return None
+    try:
+        return datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+def _lock_is_fresh(started_at: str) -> bool:
+    started = _parse_status_time(started_at)
+    if started is None:
+        return False
+    return (datetime.now() - started).total_seconds() < STALE_LOCK_TIMEOUT_SECONDS
+
+def clear_stale_lock() -> None:
+    """复位被异常中断（进程被杀/断电）遗留的抓取状态锁"""
+    if not os.path.exists(STATUS_PATH):
+        return
+    try:
+        with open(STATUS_PATH, "r", encoding="utf-8") as f:
+            status = json.load(f)
+    except Exception:
+        return
+    if status.get("is_crawling") and not _lock_is_fresh(status.get("started_at", "")):
+        update_crawler_status({
+            "is_crawling": False,
+            "started_at": "",
+            "last_error": "检测到上次抓取进程异常退出，已自动复位陈旧状态锁"
+        })
+        print("[Crawler] 已自动复位陈旧抓取状态锁")
 
 def update_crawler_status(status_dict: Dict[str, Any]):
     current = get_crawler_status()
@@ -124,7 +162,6 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
         # 循环翻页与解析
         max_pages = 100
         current_page_num = 1
-        consecutive_duplicate_pages = 0
 
         while current_page_num <= max_pages:
             print(f"[Crawler] 正在解析第 {current_page_num} 页 DOM 数据...")
@@ -155,38 +192,24 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
             print(f"[Crawler] 第 {current_page_num} 页解析完成，新增 {added_this_page} 条使用记录")
 
             if all_exist_in_db:
-                consecutive_duplicate_pages += 1
-                if consecutive_duplicate_pages >= 1:
-                    print(f"[Crawler] 第 {current_page_num} 页所有记录均已存在于数据库中，增量同步完成，提前停止后续翻页！")
-                    break
-            else:
-                consecutive_duplicate_pages = 0
+                print(f"[Crawler] 第 {current_page_num} 页所有记录均已存在于数据库中，增量同步完成，提前停止后续翻页！")
+                break
 
-            btns = page.query_selector_all("button")
-            next_btn = None
-            if len(btns) >= 2:
-                candidate = btns[-2]
-                is_disabled = candidate.evaluate("el => el.disabled")
-                if not is_disabled:
-                    next_btn = candidate
+            next_btn = _find_next_button(page)
 
             if next_btn:
                 try:
+                    first_row_before = _first_row_signature(page)
                     next_btn.scroll_into_view_if_needed()
                     time.sleep(0.5)
-
-                    first_cell = page.query_selector("td")
-                    time_before = first_cell.inner_text().strip() if first_cell else ""
 
                     print(f"[Crawler] 正在点击跳转到第 {current_page_num + 1} 页...")
                     next_btn.click()
                     time.sleep(2.5)
 
-                    first_cell_after = page.query_selector("td")
-                    time_after = first_cell_after.inner_text().strip() if first_cell_after else ""
-
-                    if time_before and time_before == time_after:
-                        print("[Crawler] 点击后第一行数据没有发生变化，已到达最后一页。")
+                    first_row_after = _first_row_signature(page)
+                    if first_row_before and first_row_before == first_row_after:
+                        print("[Crawler] 点击后首行数据未变化，已到达最后一页。")
                         break
 
                     current_page_num += 1
@@ -202,7 +225,44 @@ def fetch_opencode_usage() -> List[Dict[str, Any]]:
     print(f"[Crawler Summary] 全量抓取解析完成，共获取 {len(records)} 条历史记录！")
     return records
 
+def _first_row_signature(page) -> str:
+    """取当前页面第一条有效数据行的签名，用于判断翻页后内容是否变化"""
+    rows = page.query_selector_all("tr")
+    for tr in rows:
+        cells = tr.query_selector_all("td")
+        if len(cells) < 4:
+            continue
+        texts = [c.inner_text().strip() for c in cells[:5]]
+        if any(texts):
+            return "|".join(texts)
+    return ""
+
+def _find_next_button(page):
+    """优先按文案/aria-label 定位“下一页”，兼容原页面倒数第二个按钮的结构"""
+    btns = page.query_selector_all("button")
+    for b in btns:
+        try:
+            text = (b.inner_text() or "").strip()
+            label = (b.get_attribute("aria-label") or "").strip()
+        except Exception:
+            continue
+        if any(k in text for k in ("下一页", "下页", "Next", "next")) or "next" in label.lower():
+            try:
+                if not b.evaluate("el => el.disabled"):
+                    return b
+            except Exception:
+                pass
+    if len(btns) >= 2:
+        candidate = btns[-2]
+        try:
+            if not candidate.evaluate("el => el.disabled"):
+                return candidate
+        except Exception:
+            pass
+    return None
+
 def run_crawler_job():
+    clear_stale_lock()
     status = get_crawler_status()
     if status.get("is_crawling"):
         print("[Crawler Job] 上一次抓取任务仍在运行中，本次触发跳过。")
@@ -211,6 +271,7 @@ def run_crawler_job():
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     update_crawler_status({
         "is_crawling": True,
+        "started_at": start_time,
         "last_sync_time": start_time,
         "last_error": ""
     })
@@ -224,6 +285,7 @@ def run_crawler_job():
         print(f"[Crawler Job] 成功新增/增量更新 {inserted} 条记录到 SQLite 数据库")
         update_crawler_status({
             "is_crawling": False,
+            "started_at": "",
             "last_inserted_count": inserted,
             "last_error": ""
         })
@@ -232,6 +294,7 @@ def run_crawler_job():
         print(f"[Crawler Job] 抓取出现错误: {err_msg}")
         update_crawler_status({
             "is_crawling": False,
+            "started_at": "",
             "last_error": err_msg
         })
 

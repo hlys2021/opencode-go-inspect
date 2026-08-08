@@ -2,7 +2,7 @@ import sqlite3
 import hashlib
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "opencode_monitor.db")
@@ -12,7 +12,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def parse_to_standard_time(rec_time: str, default_year: int = 2026) -> str:
+def parse_to_standard_time(rec_time: str, default_year: Optional[int] = None) -> str:
     """
     将中文时间字符串（如 '8月8日 上午12:08'）转换为可精准排序的标准 ISO 时间（如 '2026-08-08 00:08:00'）
     规则：
@@ -30,6 +30,7 @@ def parse_to_standard_time(rec_time: str, default_year: int = 2026) -> str:
 
     month = int(match.group(1))
     day = int(match.group(2))
+    year = default_year if default_year is not None else datetime.now().year
     ampm = match.group(3)
     hour_str = match.group(4)
     minute_str = match.group(5)
@@ -44,7 +45,7 @@ def parse_to_standard_time(rec_time: str, default_year: int = 2026) -> str:
         elif ampm == "上午":
             hour = 0 if h == 12 else h
 
-    return f"{default_year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:00"
+    return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:00"
 
 def init_db():
     conn = get_db_connection()
@@ -151,14 +152,62 @@ def insert_usage_records(records: List[Dict[str, Any]]) -> int:
     conn.close()
     return inserted_count
 
-def get_recent_usage(limit: int = 10000) -> List[Dict[str, Any]]:
+def get_recent_usage(limit: int = 10000, offset: int = 0) -> List[Dict[str, Any]]:
     """按标准化真实时间倒序查询最新的使用记录"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM usage_logs ORDER BY parsed_time DESC, id DESC LIMIT ?", (limit,))
+    cursor.execute(
+        "SELECT * FROM usage_logs ORDER BY parsed_time DESC, id DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+def get_usage_count() -> int:
+    """获取使用记录总数"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM usage_logs")
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] or 0
+
+def get_all_usage() -> List[Dict[str, Any]]:
+    """导出全部使用记录"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM usage_logs ORDER BY parsed_time DESC, id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_cost_between(start_time: str, end_time: str) -> float:
+    """统计 [start_time, end_time) 区间内的成本合计"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0.0) as cost FROM usage_logs WHERE parsed_time >= ? AND parsed_time < ?",
+        (start_time, end_time),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row["cost"] or 0.0
+
+def get_current_period_costs() -> Dict[str, float]:
+    """按 parsed_time 统计当月与当日成本，作为月度/日度预算告警基准"""
+    now = datetime.now()
+    month_start = f"{now.year:04d}-{now.month:02d}-01 00:00:00"
+    if now.month == 12:
+        month_end = f"{now.year + 1:04d}-01-01 00:00:00"
+    else:
+        month_end = f"{now.year:04d}-{now.month + 1:02d}-01 00:00:00"
+    day_start = now.strftime("%Y-%m-%d 00:00:00")
+    day_end = (now + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
+    return {
+        "monthly_cost": get_cost_between(month_start, month_end),
+        "daily_cost": get_cost_between(day_start, day_end),
+    }
 
 def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
     """
@@ -187,8 +236,7 @@ def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
             if granularity == "hourly":
                 key = f"{month_day} {hour}:00"
             elif granularity == "weekly":
-                week_num = (day_num - 1) // 7 + 1
-                key = f"{p_time[5:7]}月第{week_num}周"
+                key = _weekly_key(p_time)
             else:  # daily
                 key = month_day
         else:
@@ -209,6 +257,17 @@ def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
         "tokens_data": tokens_data,
         "cost_data": cost_data
     }
+
+def _weekly_key(p_time: str) -> str:
+    """按 ISO 自然周聚合，如 '2026年第32周'；无法解析时回退为近似周"""
+    try:
+        dt = datetime.strptime(p_time, "%Y-%m-%d %H:%M:%S")
+        iso_year, iso_week, _ = dt.isocalendar()
+        return f"{iso_year}年第{iso_week}周"
+    except ValueError:
+        day_num = int(p_time[8:10])
+        week_num = (day_num - 1) // 7 + 1
+        return f"{p_time[5:7]}月第{week_num}周"
 
 def get_usage_summary() -> Dict[str, Any]:
     """获取使用量汇总信息"""
@@ -243,24 +302,41 @@ def get_usage_summary() -> Dict[str, Any]:
 
     conn.close()
 
+    period_costs = get_current_period_costs()
+
     return {
         "total_records": total_row["total_records"] or 0,
         "total_input": total_row["total_input"] or 0,
         "total_output": total_row["total_output"] or 0,
         "total_tokens": total_row["total_tokens"] or 0,
         "total_cost": round(total_row["total_cost"] or 0.0, 4),
+        "monthly_cost": round(period_costs["monthly_cost"], 4),
+        "daily_cost": round(period_costs["daily_cost"], 4),
         "models": [dict(r) for r in model_rows]
     }
 
 def record_alert(alert_type: str, message: str, current_amount: float, budget_amount: float):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO alert_logs (alert_type, message, current_amount, budget_amount)
-        VALUES (?, ?, ?, ?)
-    """, (alert_type, message, current_amount, budget_amount))
+        INSERT INTO alert_logs (alert_type, message, current_amount, budget_amount, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (alert_type, message, current_amount, budget_amount, now_str))
     conn.commit()
     conn.close()
+
+def get_last_alert(alert_type: str) -> Optional[Dict[str, Any]]:
+    """获取指定类型最近一次告警记录"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM alert_logs WHERE alert_type = ? ORDER BY id DESC LIMIT 1",
+        (alert_type,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 def get_recent_alerts(limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_db_connection()

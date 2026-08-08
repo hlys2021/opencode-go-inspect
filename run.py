@@ -7,7 +7,7 @@ import uvicorn
 import database
 import crawler
 import alert_engine
-from app import app
+from app import DEFAULT_SERVER_HOST, app, get_server_port
 
 def scheduler_thread():
     print("[Scheduler] 启动后台定时抓取线程...")
@@ -37,8 +37,9 @@ if __name__ == "__main__":
 
     print("==================================================")
     print("🚀 OpenCode 使用量监控面板已启动！")
-    print("👉 请在浏览器中打开: http://127.0.0.1:8088")
+    server_port = get_server_port()
+    print(f"👉 请在浏览器中打开: http://{DEFAULT_SERVER_HOST}:{server_port}")
     print("==================================================")
 
-    # 启动 FastAPI Web 界面（使用 8088 端口）
-    uvicorn.run(app, host="127.0.0.1", port=8088)
+    # 启动 FastAPI Web 界面，默认使用未被 Windows 排除的端口。
+    uvicorn.run(app, host=DEFAULT_SERVER_HOST, port=server_port)

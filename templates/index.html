@@ -47,6 +47,7 @@
                 </div>
                 <div class="text-2xl font-extrabold text-indigo-600 mt-2" id="stat-total-cost">$0.0000</div>
                 <div class="text-xs text-gray-500 mt-2" id="stat-budget-ratio">月度预算使用率: 0%</div>
+                <div class="text-xs text-gray-400 mt-1" id="stat-period-cost">本月 $0.0000 · 今日 $0.0000</div>
                 <!-- 进度条 -->
                 <div class="w-full bg-gray-200 rounded-full h-1.5 mt-2">
                     <div id="budget-progress-bar" class="bg-indigo-600 h-1.5 rounded-full" style="width: 0%"></div>
@@ -211,10 +212,15 @@
         let currentGranularity = 'daily'; // 'hourly', 'daily', 'weekly'
         let cachedRecentLogs = [];
         let currentConfig = { monthly_budget_usd: 60.0, daily_budget_usd: 5.0 };
+        let totalCount = 0;
 
         // 分页状态
         let currentPage = 1;
         let pageSize = 20;
+
+        function esc(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+        }
 
         async function fetchAndRenderChart() {
             try {
@@ -300,16 +306,16 @@
             fetchAndRenderChart();
         }
 
-        // 分页渲染逻辑
+        // 分页渲染逻辑（数据由服务端按页返回）
         function renderTablePage() {
-            const total = cachedRecentLogs.length;
-            const totalPages = Math.ceil(total / pageSize) || 1;
+            const total = totalCount;
+            const totalPages = Math.max(1, Math.ceil(total / pageSize));
             if (currentPage > totalPages) currentPage = totalPages;
             if (currentPage < 1) currentPage = 1;
 
             const startIdx = (currentPage - 1) * pageSize;
-            const endIdx = Math.min(startIdx + pageSize, total);
-            const pageData = cachedRecentLogs.slice(startIdx, endIdx);
+            const pageData = cachedRecentLogs;
+            const endIdx = Math.min(startIdx + pageData.length, total);
 
             const tBody = document.getElementById('table-body');
             if (pageData.length === 0) {
@@ -317,11 +323,11 @@
             } else {
                 tBody.innerHTML = pageData.map(row => `
                     <tr class="hover:bg-gray-50 transition">
-                        <td class="px-6 py-4 font-mono text-xs text-gray-500">${row.record_time}</td>
-                        <td class="px-6 py-4 font-medium text-gray-900">${row.model}</td>
-                        <td class="px-6 py-4 font-mono text-emerald-600">${row.input_tokens.toLocaleString()}</td>
-                        <td class="px-6 py-4 font-mono text-blue-600">${row.output_tokens.toLocaleString()}</td>
-                        <td class="px-6 py-4 font-mono font-semibold text-indigo-600">${row.cost_str || ('$' + row.cost_usd.toFixed(4))}</td>
+                        <td class="px-6 py-4 font-mono text-xs text-gray-500">${esc(row.record_time)}</td>
+                        <td class="px-6 py-4 font-medium text-gray-900">${esc(row.model)}</td>
+                        <td class="px-6 py-4 font-mono text-emerald-600">${(row.input_tokens || 0).toLocaleString()}</td>
+                        <td class="px-6 py-4 font-mono text-blue-600">${(row.output_tokens || 0).toLocaleString()}</td>
+                        <td class="px-6 py-4 font-mono font-semibold text-indigo-600">${esc(row.cost_str || ('$' + (row.cost_usd || 0).toFixed(4)))}</td>
                     </tr>
                 `).join('');
             }
@@ -340,21 +346,21 @@
         function changePageSize(val) {
             pageSize = parseInt(val, 10);
             currentPage = 1;
-            renderTablePage();
+            loadDashboardData();
         }
 
         function prevPage() {
             if (currentPage > 1) {
                 currentPage--;
-                renderTablePage();
+                loadDashboardData();
             }
         }
 
         function nextPage() {
-            const totalPages = Math.ceil(cachedRecentLogs.length / pageSize);
+            const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
             if (currentPage < totalPages) {
                 currentPage++;
-                renderTablePage();
+                loadDashboardData();
             }
         }
 
@@ -401,7 +407,7 @@
 
         async function loadDashboardData() {
             try {
-                const res = await fetch(`/api/usage?_t=${Date.now()}`);
+                const res = await fetch(`/api/usage?page=${currentPage}&page_size=${pageSize}&_t=${Date.now()}`);
                 const data = await res.json();
 
                 const summary = data.summary;
@@ -410,24 +416,44 @@
                 const alerts = data.alerts;
 
                 cachedRecentLogs = recentLogs;
+                totalCount = data.total_count || 0;
                 currentConfig = config;
 
                 // 1. 更新卡片
                 document.getElementById('stat-total-cost').innerText = `$${summary.total_cost.toFixed(4)}`;
+                const monthlyCost = Number(summary.monthly_cost);
+                const dailyCost = Number(summary.daily_cost);
+                const monthlyBudget = Number(config.monthly_budget_usd ?? 60.0);
+                const hasMonthlyBudgetData = Number.isFinite(monthlyCost)
+                    && Number.isFinite(monthlyBudget)
+                    && monthlyBudget > 0;
+                const monthlyCostLabel = Number.isFinite(monthlyCost)
+                    ? `$${monthlyCost.toFixed(4)}`
+                    : '--';
+                const dailyCostLabel = Number.isFinite(dailyCost)
+                    ? `$${dailyCost.toFixed(4)}`
+                    : '--';
+                document.getElementById('stat-period-cost').innerText =
+                    `本月 ${monthlyCostLabel} · 今日 ${dailyCostLabel}`;
                 document.getElementById('stat-total-input').innerText = summary.total_input.toLocaleString();
                 document.getElementById('stat-total-output').innerText = summary.total_output.toLocaleString();
                 document.getElementById('stat-total-tokens').innerText = (summary.total_tokens || (summary.total_input + summary.total_output)).toLocaleString();
                 document.getElementById('stat-total-records').innerText = summary.total_records.toLocaleString();
 
-                // 月度预算百分比
-                const monthlyBudget = config.monthly_budget_usd || 60.0;
-                const ratio = Math.min(100, (summary.total_cost / monthlyBudget) * 100).toFixed(1);
-                document.getElementById('stat-budget-ratio').innerText = `月度预算 ($${monthlyBudget.toFixed(1)}) 已用 ${ratio}%`;
+                // 月度预算百分比（基于当月实际消耗）
+                const ratio = hasMonthlyBudgetData
+                    ? Math.min(100, Math.max(0, (monthlyCost / monthlyBudget) * 100))
+                    : 0;
+                const budgetLabel = Number.isFinite(monthlyBudget) && monthlyBudget > 0
+                    ? `$${monthlyBudget.toFixed(1)}`
+                    : '--';
+                const ratioLabel = hasMonthlyBudgetData ? `${ratio.toFixed(1)}%` : '暂无数据';
+                document.getElementById('stat-budget-ratio').innerText = `月度预算 (${budgetLabel}) 当月已用 ${ratioLabel}`;
                 const pBar = document.getElementById('budget-progress-bar');
                 pBar.style.width = `${ratio}%`;
-                if (ratio >= 100) {
+                if (hasMonthlyBudgetData && ratio >= 100) {
                     pBar.className = "bg-rose-600 h-1.5 rounded-full";
-                } else if (ratio >= 80) {
+                } else if (hasMonthlyBudgetData && ratio >= 80) {
                     pBar.className = "bg-amber-500 h-1.5 rounded-full";
                 } else {
                     pBar.className = "bg-indigo-600 h-1.5 rounded-full";
@@ -439,7 +465,7 @@
                     alertsContainer.classList.remove('hidden');
                     alertsContainer.innerHTML = alerts.map(a => `
                         <div class="p-4 rounded-lg border text-sm font-medium ${a.alert_type.includes('critical') ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-800'}">
-                            ${a.message} <span class="text-xs opacity-75 font-normal">(${a.created_at})</span>
+                            ${esc(a.message)} <span class="text-xs opacity-75 font-normal">(${esc(a.created_at)})</span>
                         </div>
                     `).join('');
                 } else {
