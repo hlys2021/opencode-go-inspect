@@ -3,7 +3,7 @@ import json
 import re
 import time
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 import database
 
@@ -21,6 +21,8 @@ def get_crawler_status() -> Dict[str, Any]:
         "last_sync_time": "",
         "last_inserted_count": 0,
         "last_error": "",
+        "last_go_sync_time": "",
+        "last_go_error": "",
         "started_at": ""
     }
     if not os.path.exists(STATUS_PATH):
@@ -85,6 +87,129 @@ def parse_cost_to_usd(cost_str: str) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+def get_go_url(config: Optional[Dict[str, Any]] = None) -> str:
+    """读取 Go 套餐页面地址，未配置时从使用量页面自动推导。"""
+    config = config or load_config()
+    configured_url = str(config.get("go_url") or "").strip()
+    if configured_url:
+        return configured_url
+
+    target_url = str(config.get("target_url") or "").rstrip("/")
+    if target_url.endswith("/usage"):
+        return target_url[:-len("/usage")] + "/go"
+    return target_url + "/go" if target_url else ""
+
+def _parse_percentage(value_text: str) -> Optional[float]:
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*%", value_text or "")
+    if not match:
+        return None
+    try:
+        return max(0.0, min(100.0, float(match.group(1))))
+    except ValueError:
+        return None
+
+def _parse_reset_delta(reset_text: str) -> Optional[timedelta]:
+    """解析页面的相对重置时间，如 '3 days 19 hours'。"""
+    text = (reset_text or "").lower()
+    units = {
+        "second": "seconds", "seconds": "seconds", "秒": "seconds",
+        "minute": "minutes", "minutes": "minutes", "分钟": "minutes",
+        "hour": "hours", "hours": "hours", "小时": "hours",
+        "day": "days", "days": "days", "天": "days",
+        "week": "weeks", "weeks": "weeks", "周": "weeks",
+    }
+    total_seconds = 0
+    pattern = r"(\d+(?:\.\d+)?)\s*(seconds?|minutes?|hours?|days?|weeks?|秒|分钟|小时|天|周)"
+    for match in re.finditer(pattern, text):
+        unit = units.get(match.group(2))
+        if unit:
+            total_seconds += int(float(match.group(1)) * {
+                "seconds": 1,
+                "minutes": 60,
+                "hours": 3600,
+                "days": 86400,
+                "weeks": 604800,
+            }[unit])
+    return timedelta(seconds=total_seconds) if total_seconds > 0 else None
+
+def fetch_go_usage_snapshot() -> Dict[str, Any]:
+    """抓取 Go 页面上的滚动、每周、每月额度和相对/预计重置时间。"""
+    config = load_config()
+    source_url = get_go_url(config)
+    if not source_url:
+        raise RuntimeError("未配置 OpenCode Go 页面地址")
+
+    headless = config.get("headless", True)
+    fetched_at_dt = datetime.now()
+    fetched_at = fetched_at_dt.strftime("%Y-%m-%d %H:%M:%S")
+    result: Dict[str, Any] = {
+        "fetched_at": fetched_at,
+        "source_url": source_url,
+        "rolling": {},
+        "weekly": {},
+        "monthly": {},
+    }
+
+    label_map = {
+        "rolling usage": "rolling",
+        "weekly usage": "weekly",
+        "monthly usage": "monthly",
+        "滚动用量": "rolling",
+        "每周用量": "weekly",
+        "每月用量": "monthly",
+    }
+
+    with sync_playwright() as p:
+        user_data_dir = os.path.join(os.path.dirname(__file__), "user_data")
+        browser_context = p.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=headless,
+            viewport={"width": 1400, "height": 1000},
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        try:
+            page = browser_context.pages[0] if browser_context.pages else browser_context.new_page()
+            print(f"[Crawler] 正在打开 Go 页面: {source_url}")
+            page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
+            if "login" in page.url.lower() or "auth" in page.url.lower():
+                raise RuntimeError("Go 页面需要登录，请先以 headless=false 完成登录")
+
+            try:
+                page.wait_for_selector('[data-slot="usage-item"]', timeout=30000)
+            except Exception as exc:
+                body_text = page.locator("body").inner_text(timeout=10000)
+                if "OpenCode Go" not in body_text and "Rolling Usage" not in body_text:
+                    raise RuntimeError("未找到 Go 套餐用量区域，页面可能未登录或结构已变化") from exc
+
+            items = page.locator('[data-slot="usage-item"]')
+            for index in range(items.count()):
+                item = items.nth(index)
+                label = item.locator('[data-slot="usage-label"]').inner_text().strip()
+                metric_name = label_map.get(label.lower())
+                if not metric_name:
+                    continue
+                value_text = item.locator('[data-slot="usage-value"]').inner_text().strip()
+                reset_text = item.locator('[data-slot="reset-time"]').inner_text().strip()
+                percentage = _parse_percentage(value_text)
+                reset_text = re.sub(r"^resets\s+in\s*", "", reset_text, flags=re.IGNORECASE).strip()
+                reset_delta = _parse_reset_delta(reset_text)
+                result[metric_name] = {
+                    "percentage": percentage,
+                    "reset_text": reset_text,
+                    "reset_at": (fetched_at_dt + reset_delta).strftime("%Y-%m-%d %H:%M:%S") if reset_delta else "",
+                }
+        finally:
+            browser_context.close()
+
+    missing = [name for name in ("rolling", "weekly", "monthly") if result[name].get("percentage") is None]
+    if missing:
+        raise RuntimeError(f"Go 页面缺少用量字段: {', '.join(missing)}")
+    print(
+        "[Crawler] Go 用量抓取完成: "
+        + ", ".join(f"{name}={result[name]['percentage']}%" for name in ("rolling", "weekly", "monthly"))
+    )
+    return result
 
 def fetch_opencode_usage() -> List[Dict[str, Any]]:
     config = load_config()
@@ -278,25 +403,36 @@ def run_crawler_job():
 
     database.init_db()
     print(f"[Crawler Job] [{start_time}] 开始抓取 OpenCode 使用量...")
+    inserted = 0
+    usage_error = ""
+    go_error = ""
     try:
         records = fetch_opencode_usage()
         print(f"[Crawler Job] 共解析出 {len(records)} 条历史使用记录")
         inserted = database.insert_usage_records(records)
         print(f"[Crawler Job] 成功新增/增量更新 {inserted} 条记录到 SQLite 数据库")
-        update_crawler_status({
-            "is_crawling": False,
-            "started_at": "",
-            "last_inserted_count": inserted,
-            "last_error": ""
-        })
     except Exception as e:
-        err_msg = str(e)
-        print(f"[Crawler Job] 抓取出现错误: {err_msg}")
-        update_crawler_status({
-            "is_crawling": False,
-            "started_at": "",
-            "last_error": err_msg
-        })
+        usage_error = str(e)
+        print(f"[Crawler Job] 抓取出现错误: {usage_error}")
+        update_crawler_status({"last_error": usage_error})
+
+    try:
+        go_snapshot = fetch_go_usage_snapshot()
+        database.insert_go_usage_snapshot(go_snapshot)
+        go_sync_time = go_snapshot.get("fetched_at", "")
+        print(f"[Crawler Job] Go 用量快照已保存: {go_sync_time}")
+    except Exception as e:
+        go_error = str(e)
+        print(f"[Crawler Job] Go 用量抓取出现错误: {go_error}")
+
+    update_crawler_status({
+        "is_crawling": False,
+        "started_at": "",
+        "last_inserted_count": inserted,
+        "last_go_sync_time": go_sync_time if not go_error else get_crawler_status().get("last_go_sync_time", ""),
+        "last_go_error": go_error,
+        "last_error": "；".join(error for error in (usage_error, go_error) if error)
+    })
 
 if __name__ == "__main__":
     run_crawler_job()

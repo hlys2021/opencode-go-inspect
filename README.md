@@ -17,6 +17,8 @@ D:\models\opencode-inspect\
 ├── alert_engine.py       # 预算消耗计算与预警/超额告警触发引擎
 ├── app.py                # FastAPI 后端 REST API 与 CSV 导出服务
 ├── run.py                # 一键启动主服务脚本 (同时运行后台抓取与 Web 看板)
+├── start_opencode_monitor.bat # Windows 隐藏启动脚本
+├── backend_launcher.py   # 页面重启后端使用的隐藏辅助启动器
 ├── templates/
 │   └── index.html        # Chart.js + TailwindCSS 响应式监控看板界面
 └── user_data/            # Playwright 浏览器登录状态与 Session 持久化目录
@@ -41,6 +43,7 @@ playwright install chromium
 ```json
 {
   "target_url": "https://opencode.ai/workspace/YOUR_WORKSPACE_ID/usage",
+  "go_url": "https://opencode.ai/workspace/YOUR_WORKSPACE_ID/go",
   "fetch_interval_minutes": 30,
   "daily_budget_usd": 5.0,
   "monthly_budget_usd": 50.0,
@@ -59,6 +62,10 @@ python run.py
 
 * **首次运行登录**：系统会弹出一个 Chromium 浏览器窗口打开 OpenCode 使用量页面。如果是首次使用，请在弹出的窗口中手动完成账号登录。登录凭证会自动保存至 `user_data/` 目录，后续运行无需再次登录。
 * **访问 Web 看板**：打开浏览器访问 [http://127.0.0.1:18088](http://127.0.0.1:18088) 即可查看可视化图表与详细面板。若需自定义端口，可先设置环境变量 `OPENCODE_MONITOR_PORT`。
+* **隐藏启动**：双击根目录下的 `start_opencode_monitor.bat`，后端将以隐藏窗口启动并自动打开浏览器页面。
+* **后端控制**：页面顶部可查看后端健康状态；“重启后端”会无感重启服务，“关闭后端”会停止服务。关闭后请再次运行 `start_opencode_monitor.bat` 恢复服务。
+* **模型统计**：页面会分别展示各模型的输入 Token、输出 Token、累计 Token 和成本；图表支持“全部模型/指定模型”以及每小时、每日、每周、每月粒度。
+* **Go 套餐额度**：同步任务会读取 Go 页面上的滚动、每周、每月使用比例，保存最近成功快照，并显示页面返回的重置倒计时及按抓取时间换算的预计重置时间。
 
 ---
 

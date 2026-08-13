@@ -17,7 +17,19 @@
                 <h1 class="text-3xl font-bold text-gray-900 tracking-tight">OpenCode 使用量监控面板</h1>
                 <p class="text-sm text-gray-500 mt-1">实时追踪 Go 套餐 Token 消耗、成本计算与预算预警</p>
             </div>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 flex-wrap justify-end">
+                <div id="backend-status" class="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs text-gray-600" title="后端服务状态">
+                    <span id="backend-status-dot" class="w-2 h-2 rounded-full bg-gray-400"></span>
+                    <span id="backend-status-text">后端检查中</span>
+                </div>
+                <button onclick="restartBackend()" id="btn-backend-restart" title="重启后端服务" class="bg-amber-500 hover:bg-amber-600 text-white font-medium px-3 py-2 rounded-lg text-sm transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    重启后端
+                </button>
+                <button onclick="stopBackend()" id="btn-backend-stop" title="关闭后端服务" class="bg-rose-600 hover:bg-rose-700 text-white font-medium px-3 py-2 rounded-lg text-sm transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 6h12v12H6z"/></svg>
+                    关闭后端
+                </button>
                 <button onclick="openConfigModal()" class="bg-gray-600 hover:bg-gray-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                     预算设置
@@ -35,6 +47,20 @@
 
         <!-- 告警提示栏 -->
         <div id="alerts-container" class="mb-8 space-y-3 hidden"></div>
+
+        <!-- OpenCode Go 套餐额度 -->
+        <section class="mb-8">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <div>
+                    <h2 class="text-base font-semibold text-gray-900">OpenCode Go 套餐额度</h2>
+                    <p class="text-xs text-gray-400 mt-1">来自 Go 页面最近一次成功抓取的比例与重置时间</p>
+                </div>
+                <div id="go-usage-status" class="text-xs text-gray-400">等待同步</div>
+            </div>
+            <div id="go-usage-grid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 text-sm text-gray-400 md:col-span-3">加载 Go 套餐额度中...</div>
+            </div>
+        </section>
 
         <!-- 核心统计指标卡片 -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
@@ -79,6 +105,17 @@
             </div>
         </div>
 
+        <!-- 各模型 Token 统计 -->
+        <section class="mb-8">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-base font-semibold text-gray-900">各模型 Token 使用量</h2>
+                <span id="model-summary-caption" class="text-xs text-gray-400">累计统计</span>
+            </div>
+            <div id="model-summary-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 text-sm text-gray-400">加载模型统计中...</div>
+            </div>
+        </section>
+
         <!-- 图表可视化区域 -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
             <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 lg:col-span-2">
@@ -97,12 +134,25 @@
                             <button onclick="setGranularity('weekly')" id="btn-gran-weekly" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
                                 每周
                             </button>
+                            <button onclick="setGranularity('monthly')" id="btn-gran-monthly" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
+                                每月
+                            </button>
                         </div>
+
+                        <select id="chart-model-select" onchange="setChartModel(this.value)" class="border border-gray-200 rounded-md bg-white px-2.5 py-1.5 text-xs text-gray-700 focus:outline-none focus:border-indigo-500">
+                            <option value="all">全部模型</option>
+                        </select>
 
                         <!-- 统计指标类型按钮 -->
                         <div class="inline-flex rounded-lg bg-gray-100 p-1 text-xs">
+                            <button onclick="switchChartMode('input_tokens')" id="btn-chart-input" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
+                                输入
+                            </button>
+                            <button onclick="switchChartMode('output_tokens')" id="btn-chart-output" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
+                                输出
+                            </button>
                             <button onclick="switchChartMode('tokens')" id="btn-chart-tokens" class="px-2.5 py-1 font-medium rounded-md bg-white text-teal-600 shadow-sm transition">
-                                Token 消耗
+                                累计
                             </button>
                             <button onclick="switchChartMode('cost')" id="btn-chart-cost" class="px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition">
                                 成本 (USD)
@@ -208,11 +258,13 @@
     <script>
         let costChartInstance = null;
         let modelChartInstance = null;
-        let currentChartMode = 'tokens'; // 'tokens' 或 'cost'
+        let currentChartMode = 'tokens'; // 'input_tokens', 'output_tokens', 'tokens' 或 'cost'
         let currentGranularity = 'daily'; // 'hourly', 'daily', 'weekly'
+        let currentChartModel = 'all';
         let cachedRecentLogs = [];
         let currentConfig = { monthly_budget_usd: 60.0, daily_budget_usd: 5.0 };
         let totalCount = 0;
+        let backendStatusTimer = null;
 
         // 分页状态
         let currentPage = 1;
@@ -224,19 +276,31 @@
 
         async function fetchAndRenderChart() {
             try {
-                const res = await fetch(`/api/chart_data?granularity=${currentGranularity}&_t=${Date.now()}`);
+                const params = new URLSearchParams({
+                    granularity: currentGranularity,
+                    model: currentChartModel,
+                    _t: Date.now().toString()
+                });
+                const res = await fetch(`/api/chart_data?${params.toString()}`);
                 const chartData = await res.json();
 
                 const ctx = document.getElementById('costChart').getContext('2d');
                 if (costChartInstance) costChartInstance.destroy();
 
-                const isTokensMode = currentChartMode === 'tokens';
-                const labelTitle = isTokensMode ? '累计 Token 消耗' : '耗费成本 (USD)';
-                const dataValues = isTokensMode ? chartData.tokens_data : chartData.cost_data;
-                const strokeColor = isTokensMode ? '#0d9488' : '#4f46e5';
-                const fillColor = isTokensMode ? 'rgba(13, 148, 136, 0.08)' : 'rgba(79, 70, 229, 0.08)';
+                const chartMetric = {
+                    input_tokens: { title: '输入 Token', data: chartData.input_tokens_data, stroke: '#059669', fill: 'rgba(5, 150, 105, 0.08)' },
+                    output_tokens: { title: '输出 Token', data: chartData.output_tokens_data, stroke: '#2563eb', fill: 'rgba(37, 99, 235, 0.08)' },
+                    tokens: { title: '累计 Token', data: chartData.tokens_data, stroke: '#0d9488', fill: 'rgba(13, 148, 136, 0.08)' },
+                    cost: { title: '耗费成本 (USD)', data: chartData.cost_data, stroke: '#4f46e5', fill: 'rgba(79, 70, 229, 0.08)' }
+                }[currentChartMode] || null;
+                const metric = chartMetric || { title: '累计 Token', data: chartData.tokens_data, stroke: '#0d9488', fill: 'rgba(13, 148, 136, 0.08)' };
+                const labelTitle = metric.title;
+                const dataValues = metric.data || [];
+                const strokeColor = metric.stroke;
+                const fillColor = metric.fill;
+                const modelLabel = currentChartModel === 'all' ? '全部模型' : currentChartModel;
 
-                document.getElementById('chart-title').innerText = `时间与累计 ${labelTitle} 分布 (${granularityLabel(currentGranularity)})`;
+                document.getElementById('chart-title').innerText = `${modelLabel} · ${labelTitle} (${granularityLabel(currentGranularity)})`;
 
                 costChartInstance = new Chart(ctx, {
                     type: 'line',
@@ -274,12 +338,13 @@
         function granularityLabel(gran) {
             if (gran === 'hourly') return '按小时聚合';
             if (gran === 'weekly') return '按每周聚合';
+            if (gran === 'monthly') return '按每月聚合';
             return '按每日聚合';
         }
 
         function setGranularity(gran) {
             currentGranularity = gran;
-            ['hourly', 'daily', 'weekly'].forEach(g => {
+            ['hourly', 'daily', 'weekly', 'monthly'].forEach(g => {
                 const btn = document.getElementById(`btn-gran-${g}`);
                 if (g === gran) {
                     btn.className = "px-2.5 py-1 font-medium rounded-md bg-white text-indigo-600 shadow-sm transition";
@@ -290,18 +355,215 @@
             fetchAndRenderChart();
         }
 
+        function setChartModel(model) {
+            currentChartModel = model || 'all';
+            fetchAndRenderChart();
+        }
+
+        function renderModelSummary(models) {
+            const grid = document.getElementById('model-summary-grid');
+            const normalized = Array.isArray(models) ? models : [];
+            if (normalized.length === 0) {
+                grid.innerHTML = '<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 text-sm text-gray-400">暂无模型使用记录</div>';
+                return;
+            }
+
+            grid.innerHTML = normalized
+                .slice()
+                .sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0))
+                .map(model => `
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                        <div class="flex items-center justify-between gap-3 mb-4">
+                            <h3 class="font-semibold text-gray-900 truncate" title="${esc(model.model)}">${esc(model.model)}</h3>
+                            <span class="text-xs text-gray-400">${Number(model.count || 0).toLocaleString()} 条</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-3 text-sm">
+                            <div><div class="text-xs text-gray-400">输入 Token</div><div class="mt-1 font-mono font-semibold text-emerald-600">${Number(model.input_tokens || 0).toLocaleString()}</div></div>
+                            <div><div class="text-xs text-gray-400">输出 Token</div><div class="mt-1 font-mono font-semibold text-blue-600">${Number(model.output_tokens || 0).toLocaleString()}</div></div>
+                            <div><div class="text-xs text-gray-400">累计 Token</div><div class="mt-1 font-mono font-semibold text-teal-600">${Number(model.total_tokens || 0).toLocaleString()}</div></div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-gray-100 flex justify-between text-xs text-gray-500">
+                            <span>成本</span><span class="font-mono font-semibold text-indigo-600">$${Number(model.cost_usd || 0).toFixed(4)}</span>
+                        </div>
+                    </div>
+                `).join('');
+
+            const select = document.getElementById('chart-model-select');
+            const previous = currentChartModel;
+            select.innerHTML = '<option value="all">全部模型</option>' + normalized
+                .slice()
+                .sort((a, b) => String(a.model).localeCompare(String(b.model)))
+                .map(model => `<option value="${esc(model.model)}">${esc(model.model)}</option>`)
+                .join('');
+            const exists = [...select.options].some(option => option.value === previous);
+            currentChartModel = exists ? previous : 'all';
+            select.value = currentChartModel;
+        }
+
+        function formatGoPercentage(value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? `${number.toFixed(number % 1 ? 1 : 0)}%` : '--';
+        }
+
+        function renderGoUsage(snapshot, crawlerStatus) {
+            const grid = document.getElementById('go-usage-grid');
+            const status = document.getElementById('go-usage-status');
+            if (!snapshot) {
+                grid.innerHTML = '<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 text-sm text-gray-400 md:col-span-3">暂无 Go 套餐额度快照，请点击“立即抓取同步”。</div>';
+                status.innerText = crawlerStatus?.last_go_error ? `抓取失败：${crawlerStatus.last_go_error}` : '等待首次同步';
+                status.className = 'text-xs text-amber-600';
+                return;
+            }
+
+            const metrics = [
+                { key: 'rolling', label: '滚动用量', color: 'indigo' },
+                { key: 'weekly', label: '每周用量', color: 'emerald' },
+                { key: 'monthly', label: '每月用量', color: 'blue' }
+            ];
+            const colorMap = {
+                indigo: ['text-indigo-600', 'bg-indigo-600'],
+                emerald: ['text-emerald-600', 'bg-emerald-600'],
+                blue: ['text-blue-600', 'bg-blue-600']
+            };
+            grid.innerHTML = metrics.map(metric => {
+                const data = snapshot[metric.key] || {};
+                const percentage = Number(data.percentage);
+                const ratio = Number.isFinite(percentage) ? Math.max(0, Math.min(100, percentage)) : 0;
+                const colors = colorMap[metric.color];
+                const resetText = data.reset_text ? `重置倒计时：${esc(data.reset_text)}` : '重置时间暂不可用';
+                const resetAt = data.reset_at ? `预计 ${esc(data.reset_at)}` : '';
+                return `
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider">${metric.label}</div>
+                            <div class="text-2xl font-extrabold ${colors[0]}">${formatGoPercentage(data.percentage)}</div>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2 mt-4">
+                            <div class="${colors[1]} h-2 rounded-full transition-all" style="width:${ratio}%"></div>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-3">${resetText}</div>
+                        <div class="text-xs text-gray-400 mt-1">${resetAt}</div>
+                    </div>
+                `;
+            }).join('');
+            const suffix = crawlerStatus?.last_go_error ? ` · 最近一次抓取异常：${crawlerStatus.last_go_error}` : '';
+            status.innerText = `数据抓取于 ${snapshot.fetched_at}${suffix}`;
+            status.className = crawlerStatus?.last_go_error ? 'text-xs text-amber-600' : 'text-xs text-gray-400';
+        }
+
+        function setBackendStatus(online, text, detail = '') {
+            const dot = document.getElementById('backend-status-dot');
+            const label = document.getElementById('backend-status-text');
+            const status = document.getElementById('backend-status');
+            const stopButton = document.getElementById('btn-backend-stop');
+            const restartButton = document.getElementById('btn-backend-restart');
+            dot.className = `w-2 h-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-rose-500'}`;
+            label.innerText = text;
+            status.title = detail || text;
+            stopButton.disabled = !online;
+            stopButton.classList.toggle('opacity-50', !online);
+            stopButton.classList.toggle('cursor-not-allowed', !online);
+            restartButton.disabled = !online;
+            restartButton.classList.toggle('opacity-50', !online);
+            restartButton.classList.toggle('cursor-not-allowed', !online);
+        }
+
+        async function checkBackendStatus() {
+            try {
+                const res = await fetch(`/api/server/status?_t=${Date.now()}`, { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const uptime = Number(data.uptime_seconds || 0);
+                const uptimeText = uptime >= 3600
+                    ? `${Math.floor(uptime / 3600)}小时${Math.floor((uptime % 3600) / 60)}分`
+                    : `${Math.floor(uptime / 60)}分${uptime % 60}秒`;
+                setBackendStatus(
+                    Boolean(data.healthy),
+                    data.healthy ? '后端运行正常' : '后端异常',
+                    `PID ${data.pid} · 已运行 ${uptimeText} · ${data.started_at}`
+                );
+                return Boolean(data.healthy);
+            } catch (error) {
+                setBackendStatus(false, '后端未运行', '无法连接到后端服务');
+                return false;
+            }
+        }
+
+        function setBackendActionState(disabled, label) {
+            const restartButton = document.getElementById('btn-backend-restart');
+            const stopButton = document.getElementById('btn-backend-stop');
+            restartButton.disabled = disabled;
+            stopButton.disabled = disabled;
+            restartButton.classList.toggle('opacity-50', disabled);
+            stopButton.classList.toggle('opacity-50', disabled);
+            if (label) document.getElementById('backend-status-text').innerText = label;
+        }
+
+        async function waitForBackendState(expectedOnline, expectedPid = null, timeoutMs = 20000) {
+            const deadline = Date.now() + timeoutMs;
+            while (Date.now() < deadline) {
+                try {
+                    const res = await fetch(`/api/server/status?_t=${Date.now()}`, { cache: 'no-store' });
+                    if (res.ok) {
+                        const data = await res.json();
+                        setBackendStatus(true, '后端运行正常', `PID ${data.pid}`);
+                        if (expectedOnline && (!expectedPid || data.pid !== expectedPid)) return data;
+                        if (!expectedOnline) return false;
+                    }
+                } catch (error) {
+                    if (!expectedOnline) return true;
+                }
+                await new Promise(resolve => setTimeout(resolve, 800));
+            }
+            return expectedOnline ? null : false;
+        }
+
+        async function restartBackend() {
+            setBackendActionState(true, '后端重启中');
+            try {
+                const currentStatusResponse = await fetch(`/api/server/status?_t=${Date.now()}`, { cache: 'no-store' });
+                const currentStatus = currentStatusResponse.ok ? await currentStatusResponse.json() : null;
+                const res = await fetch('/api/server/restart', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || data.status === 'error') throw new Error(data.message || '重启失败');
+                const recovered = await waitForBackendState(true, currentStatus?.pid || null);
+                if (!recovered) throw new Error('后端重启后未能重新连接');
+                await loadDashboardData();
+            } catch (error) {
+                setBackendStatus(false, '后端重启失败', error.message);
+                alert(`后端重启失败: ${error.message}`);
+            } finally {
+                await checkBackendStatus();
+            }
+        }
+
+        async function stopBackend() {
+            if (!window.confirm('确定要关闭后端服务吗？关闭后需要重新运行根目录启动脚本才能恢复。')) return;
+            setBackendActionState(true, '后端关闭中');
+            try {
+                const res = await fetch('/api/server/stop', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || data.status === 'error') throw new Error(data.message || '关闭失败');
+                await waitForBackendState(false);
+                setBackendStatus(false, '后端已关闭', '请运行根目录启动脚本重新启动');
+            } catch (error) {
+                setBackendStatus(false, '后端状态未知', error.message);
+            }
+        }
+
         function switchChartMode(mode) {
             currentChartMode = mode;
-            const btnCost = document.getElementById('btn-chart-cost');
-            const btnTokens = document.getElementById('btn-chart-tokens');
-
-            if (mode === 'cost') {
-                btnCost.className = "px-2.5 py-1 font-medium rounded-md bg-white text-indigo-600 shadow-sm transition";
-                btnTokens.className = "px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition";
-            } else {
-                btnTokens.className = "px-2.5 py-1 font-medium rounded-md bg-white text-teal-600 shadow-sm transition";
-                btnCost.className = "px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition";
-            }
+            const activeClass = mode === 'cost'
+                ? "px-2.5 py-1 font-medium rounded-md bg-white text-indigo-600 shadow-sm transition"
+                : "px-2.5 py-1 font-medium rounded-md bg-white text-teal-600 shadow-sm transition";
+            const inactiveClass = "px-2.5 py-1 font-medium rounded-md text-gray-600 hover:text-indigo-600 transition";
+            ['input_tokens', 'output_tokens', 'tokens', 'cost'].forEach(metric => {
+                const buttonId = metric === 'input_tokens' ? 'btn-chart-input'
+                    : metric === 'output_tokens' ? 'btn-chart-output'
+                    : metric === 'tokens' ? 'btn-chart-tokens'
+                    : 'btn-chart-cost';
+                document.getElementById(buttonId).className = metric === mode ? activeClass : inactiveClass;
+            });
 
             fetchAndRenderChart();
         }
@@ -414,10 +676,14 @@
                 const recentLogs = data.recent_logs;
                 const config = data.config;
                 const alerts = data.alerts;
+                const goUsage = data.go_usage;
+                const goUsageStatus = data.go_usage_status;
 
                 cachedRecentLogs = recentLogs;
                 totalCount = data.total_count || 0;
                 currentConfig = config;
+                renderModelSummary(summary.models);
+                renderGoUsage(goUsage, goUsageStatus);
 
                 // 1. 更新卡片
                 document.getElementById('stat-total-cost').innerText = `$${summary.total_cost.toFixed(4)}`;
@@ -498,6 +764,7 @@
 
             } catch (err) {
                 console.error("加载 Dashboard 失败:", err);
+                setBackendStatus(false, '后端未运行', err.message);
             }
         }
 
@@ -552,6 +819,8 @@
 
         // 页面初始化时加载，并开启 30 秒静默定时轮询以同步后台任务新数据
         loadDashboardData();
+        checkBackendStatus();
+        backendStatusTimer = setInterval(checkBackendStatus, 10000);
         setInterval(loadDashboardData, 30000);
     </script>
 </body>

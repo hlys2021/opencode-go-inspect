@@ -1,5 +1,6 @@
 import sqlite3
 import hashlib
+import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -94,6 +95,30 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    # 3. 保存 OpenCode Go 页面上的套餐额度快照
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS go_usage_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fetched_at TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        rolling_percentage REAL,
+        rolling_reset_text TEXT,
+        rolling_reset_at TEXT,
+        weekly_percentage REAL,
+        weekly_reset_text TEXT,
+        weekly_reset_at TEXT,
+        monthly_percentage REAL,
+        monthly_reset_text TEXT,
+        monthly_reset_at TEXT,
+        raw_data TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_go_usage_snapshots_fetched_at "
+        "ON go_usage_snapshots (fetched_at DESC, id DESC)"
+    )
 
     conn.commit()
     conn.close()
@@ -209,53 +234,163 @@ def get_current_period_costs() -> Dict[str, float]:
         "daily_cost": get_cost_between(day_start, day_end),
     }
 
-def get_aggregated_tokens(granularity: str = "daily") -> Dict[str, Any]:
-    """
-    根据给定的粒度 (hourly, daily, weekly) 聚合查询累计 Token 使用量与成本
-    """
+def insert_go_usage_snapshot(snapshot: Dict[str, Any]) -> int:
+    """保存一次 Go 套餐额度快照，返回新快照 ID。"""
+    fetched_at = snapshot.get("fetched_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    source_url = str(snapshot.get("source_url") or "")
+
+    def metric_value(name: str, field: str, default: Any = None) -> Any:
+        metric = snapshot.get(name) or {}
+        return metric.get(field, default)
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT record_time, parsed_time, input_tokens, output_tokens, cost_usd FROM usage_logs ORDER BY parsed_time ASC, id ASC")
+    cursor.execute(
+        """
+        INSERT INTO go_usage_snapshots (
+            fetched_at, source_url,
+            rolling_percentage, rolling_reset_text, rolling_reset_at,
+            weekly_percentage, weekly_reset_text, weekly_reset_at,
+            monthly_percentage, monthly_reset_text, monthly_reset_at,
+            raw_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            fetched_at,
+            source_url,
+            metric_value("rolling", "percentage"),
+            metric_value("rolling", "reset_text", ""),
+            metric_value("rolling", "reset_at", ""),
+            metric_value("weekly", "percentage"),
+            metric_value("weekly", "reset_text", ""),
+            metric_value("weekly", "reset_at", ""),
+            metric_value("monthly", "percentage"),
+            metric_value("monthly", "reset_text", ""),
+            metric_value("monthly", "reset_at", ""),
+            json.dumps(snapshot, ensure_ascii=False),
+        ),
+    )
+    snapshot_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return int(snapshot_id)
+
+def get_latest_go_usage_snapshot() -> Optional[Dict[str, Any]]:
+    """读取最近一次成功抓取的 Go 套餐额度快照。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM go_usage_snapshots ORDER BY fetched_at DESC, id DESC LIMIT 1"
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+
+    def metric(prefix: str) -> Dict[str, Any]:
+        return {
+            "percentage": row[f"{prefix}_percentage"],
+            "reset_text": row[f"{prefix}_reset_text"] or "",
+            "reset_at": row[f"{prefix}_reset_at"] or "",
+        }
+
+    return {
+        "id": row["id"],
+        "fetched_at": row["fetched_at"],
+        "source_url": row["source_url"],
+        "rolling": metric("rolling"),
+        "weekly": metric("weekly"),
+        "monthly": metric("monthly"),
+    }
+
+def get_aggregated_tokens(
+    granularity: str = "daily",
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """按时间粒度和模型聚合输入、输出 Token 及成本。"""
+    allowed_granularities = {"hourly", "daily", "weekly", "monthly"}
+    if granularity not in allowed_granularities:
+        granularity = "daily"
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    query = """
+        SELECT model, record_time, parsed_time, input_tokens, output_tokens, cost_usd
+        FROM usage_logs
+    """
+    params: List[Any] = []
+    selected_model = model.strip() if isinstance(model, str) else ""
+    if selected_model and selected_model.lower() not in {"all", "__all__"}:
+        query += " WHERE model = ?"
+        params.append(selected_model)
+    query += " ORDER BY parsed_time ASC, id ASC"
+    cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
 
-    aggregated = {}
+    aggregated: Dict[str, Dict[str, Any]] = {}
 
     for r in rows:
         p_time = r["parsed_time"] or parse_to_standard_time(r["record_time"])
-        total_tok = (r["input_tokens"] or 0) + (r["output_tokens"] or 0)
+        input_tokens = r["input_tokens"] or 0
+        output_tokens = r["output_tokens"] or 0
         cost = r["cost_usd"] or 0.0
 
-        # 从标准时间 YYYY-MM-DD HH:MM:SS 中提取 key
-        key = "未知时间"
+        # 使用可排序的标准时间作为聚合键，展示标签再在最后格式化。
+        sort_key = "unknown"
         if p_time and len(p_time) >= 16:
-            month_day = p_time[5:10] # MM-DD
-            hour = p_time[11:13]     # HH
-            day_num = int(p_time[8:10])
-
             if granularity == "hourly":
-                key = f"{month_day} {hour}:00"
+                sort_key = p_time[:13] + ":00"
             elif granularity == "weekly":
-                key = _weekly_key(p_time)
-            else:  # daily
-                key = month_day
+                try:
+                    dt = datetime.strptime(p_time, "%Y-%m-%d %H:%M:%S")
+                    iso_year, iso_week, _ = dt.isocalendar()
+                    sort_key = f"{iso_year:04d}-W{iso_week:02d}"
+                except ValueError:
+                    sort_key = p_time[:10]
+            elif granularity == "monthly":
+                sort_key = p_time[:7]
+            else:
+                sort_key = p_time[:10]
         else:
-            key = r["record_time"][:10]
+            sort_key = r["record_time"][:10] if r["record_time"] else "unknown"
 
-        if key not in aggregated:
-            aggregated[key] = {"tokens": 0, "cost": 0.0, "count": 0}
-        aggregated[key]["tokens"] += total_tok
-        aggregated[key]["cost"] += cost
-        aggregated[key]["count"] += 1
+        if sort_key not in aggregated:
+            aggregated[sort_key] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "tokens": 0,
+                "cost": 0.0,
+                "count": 0,
+            }
+        aggregated[sort_key]["input_tokens"] += input_tokens
+        aggregated[sort_key]["output_tokens"] += output_tokens
+        aggregated[sort_key]["tokens"] += input_tokens + output_tokens
+        aggregated[sort_key]["cost"] += cost
+        aggregated[sort_key]["count"] += 1
 
-    labels = list(aggregated.keys())
-    tokens_data = [aggregated[k]["tokens"] for k in labels]
-    cost_data = [round(aggregated[k]["cost"], 4) for k in labels]
+    labels = []
+    for key in aggregated:
+        if granularity == "hourly" and len(key) >= 13:
+            labels.append(f"{key[5:10]} {key[11:13]}:00")
+        elif granularity == "weekly" and "-W" in key:
+            year, week = key.split("-W", 1)
+            labels.append(f"{year}年第{int(week)}周")
+        elif granularity == "monthly" and len(key) >= 7:
+            labels.append(key[:7])
+        elif granularity == "daily" and len(key) >= 10:
+            labels.append(key[5:10])
+        else:
+            labels.append("未知时间")
 
     return {
         "labels": labels,
-        "tokens_data": tokens_data,
-        "cost_data": cost_data
+        "input_tokens_data": [aggregated[k]["input_tokens"] for k in aggregated],
+        "output_tokens_data": [aggregated[k]["output_tokens"] for k in aggregated],
+        "tokens_data": [aggregated[k]["tokens"] for k in aggregated],
+        "cost_data": [round(aggregated[k]["cost"], 4) for k in aggregated],
+        "selected_model": selected_model or "all",
+        "granularity": granularity,
     }
 
 def _weekly_key(p_time: str) -> str:
