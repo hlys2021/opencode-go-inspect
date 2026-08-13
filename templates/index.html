@@ -22,6 +22,20 @@
                     <span id="backend-status-dot" class="w-2 h-2 rounded-full bg-gray-400"></span>
                     <span id="backend-status-text">后端检查中</span>
                 </div>
+                <button onclick="triggerCrawler()" id="btn-refresh" title="立即抓取同步" class="bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-lg transition flex items-center justify-center">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                </button>
+                <label class="relative inline-flex items-center" title="抓取同步间隔">
+                    <svg class="w-4 h-4 absolute left-3 pointer-events-none text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <select id="select-fetch-interval" onchange="changeFetchInterval(this)" class="bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium pl-9 pr-8 py-2.5 rounded-lg appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                        <option value="10">10秒</option>
+                        <option value="30">30秒</option>
+                        <option value="60">1分钟</option>
+                        <option value="600">10分钟</option>
+                        <option value="1800">30分钟</option>
+                    </select>
+                    <svg class="w-4 h-4 absolute right-2.5 pointer-events-none text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </label>
                 <button onclick="restartBackend()" id="btn-backend-restart" title="重启后端服务" class="bg-amber-500 hover:bg-amber-600 text-white font-medium px-3 py-2 rounded-lg text-sm transition flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                     重启后端
@@ -33,10 +47,6 @@
                 <button onclick="openConfigModal()" class="bg-gray-600 hover:bg-gray-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                     预算设置
-                </button>
-                <button onclick="triggerCrawler()" id="btn-refresh" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                    立即抓取同步
                 </button>
                 <a href="/api/export" download class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
@@ -409,7 +419,7 @@
             const grid = document.getElementById('go-usage-grid');
             const status = document.getElementById('go-usage-status');
             if (!snapshot) {
-                grid.innerHTML = '<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 text-sm text-gray-400 md:col-span-3">暂无 Go 套餐额度快照，请点击“立即抓取同步”。</div>';
+                grid.innerHTML = '<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 text-sm text-gray-400 md:col-span-3">暂无 Go 套餐额度快照，请点击上方刷新按钮。</div>';
                 status.innerText = crawlerStatus?.last_go_error ? `抓取失败：${crawlerStatus.last_go_error}` : '等待首次同步';
                 status.className = 'text-xs text-amber-600';
                 return;
@@ -581,7 +591,7 @@
 
             const tBody = document.getElementById('table-body');
             if (pageData.length === 0) {
-                tBody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-400">尚无使用记录，请点击上方“立即抓取同步”按键。</td></tr>';
+                tBody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-400">尚无使用记录，请点击上方刷新按钮同步数据。</td></tr>';
             } else {
                 tBody.innerHTML = pageData.map(row => `
                     <tr class="hover:bg-gray-50 transition">
@@ -682,6 +692,7 @@
                 cachedRecentLogs = recentLogs;
                 totalCount = data.total_count || 0;
                 currentConfig = config;
+                updateIntervalSelect(config.fetch_interval_minutes);
                 renderModelSummary(summary.models);
                 renderGoUsage(goUsage, goUsageStatus);
 
@@ -770,12 +781,61 @@
 
         let pollingTimer = null;
 
+        const INTERVAL_OPTIONS = [
+            { seconds: 10, label: '10秒' },
+            { seconds: 30, label: '30秒' },
+            { seconds: 60, label: '1分钟' },
+            { seconds: 600, label: '10分钟' },
+            { seconds: 1800, label: '30分钟' }
+        ];
+
+        function updateIntervalSelect(minutes) {
+            const select = document.getElementById('select-fetch-interval');
+            const seconds = Math.round((Number(minutes) || 0) * 60);
+            const customOption = select.querySelector('option.interval-custom');
+            if (customOption) customOption.remove();
+
+            const matched = INTERVAL_OPTIONS.some(opt => opt.seconds === seconds);
+            if (matched) {
+                select.value = String(seconds);
+            } else if (seconds > 0) {
+                const el = document.createElement('option');
+                el.className = 'interval-custom';
+                el.value = String(seconds);
+                el.textContent = seconds >= 60 ? `${Math.round(seconds / 60)}分钟` : `${seconds}秒`;
+                select.appendChild(el);
+                select.value = String(seconds);
+            }
+        }
+
+        async function changeFetchInterval(select) {
+            const seconds = parseInt(select.value, 10);
+            if (!seconds || seconds <= 0) return;
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fetch_interval_minutes: seconds / 60 })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    updateIntervalSelect(data.config.fetch_interval_minutes);
+                    await loadDashboardData();
+                } else {
+                    alert('设置失败: ' + JSON.stringify(data));
+                    updateIntervalSelect(currentConfig.fetch_interval_minutes);
+                }
+            } catch (err) {
+                alert('设置发生错误: ' + err);
+                updateIntervalSelect(currentConfig.fetch_interval_minutes);
+            }
+        }
+
         async function pollSyncStatusStatus() {
             const btn = document.getElementById('btn-refresh');
             btn.disabled = true;
             btn.innerHTML = `
                 <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                正在抓取同步...
             `;
 
             if (pollingTimer) clearInterval(pollingTimer);
@@ -791,8 +851,7 @@
 
                         btn.disabled = false;
                         btn.innerHTML = `
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                            立即抓取同步
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                         `;
 
                         // 抓取完成，重新加载并刷新整个 Dashboard

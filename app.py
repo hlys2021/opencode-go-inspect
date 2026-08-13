@@ -168,9 +168,15 @@ def update_config(data: Dict[str, Any]):
             if value <= 0:
                 raise ValueError("daily budget must be positive")
             current_config["daily_budget_usd"] = value
+        if "fetch_interval_minutes" in data:
+            value = float(data["fetch_interval_minutes"])
+            if value <= 0:
+                raise ValueError("fetch interval must be positive")
+            # 秒级选项（10s/30s）会换算成小数分钟，这里保留 3 位小数避免浮点噪音
+            current_config["fetch_interval_minutes"] = round(value, 3)
     except (TypeError, ValueError):
         return JSONResponse(
-            {"status": "error", "message": "预算金额必须是大于 0 的数字"},
+            {"status": "error", "message": "预算金额与抓取间隔必须是大于 0 的数字"},
             status_code=400,
         )
 

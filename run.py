@@ -32,6 +32,22 @@ def hidden_subprocess_options():
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     return {"creationflags": flags}
 
+def responsive_sleep(interval_min: float) -> None:
+    """分块等待并监听配置变化，让新的抓取间隔尽快生效。"""
+    deadline = time.monotonic() + interval_min * 60
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            new_interval = crawler.load_config().get("fetch_interval_minutes", interval_min)
+        except Exception:
+            new_interval = interval_min
+        if new_interval != interval_min:
+            interval_min = new_interval
+            deadline = time.monotonic() + interval_min * 60
+        time.sleep(min(2.0, remaining))
+
 def scheduler_thread():
     print("[Scheduler] 启动后台定时抓取线程...")
     database.init_db()
@@ -53,7 +69,7 @@ def scheduler_thread():
             alert_engine.check_budget_alerts()
 
             print(f"[Scheduler] 完成抓取，等待 {interval_min} 分钟后进行下一次检查...")
-            time.sleep(interval_min * 60)
+            responsive_sleep(interval_min)
         except Exception as e:
             print(f"[Scheduler] 出现异常: {e}")
             time.sleep(60)
