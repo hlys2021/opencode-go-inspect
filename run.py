@@ -11,11 +11,22 @@ import alert_engine
 from app import DEFAULT_SERVER_HOST, app, get_server_port, set_server_shutdown_callback
 
 def ensure_stdio() -> None:
-    """pythonw 没有标准输出时，避免启动日志触发异常。"""
+    """确保 sys.stdout 和 sys.stderr 安全可用，避免编码或缺失引发异常。"""
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    elif hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    elif hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
 
 def console_python_executable() -> str:
     """抓取子进程使用 python.exe，避免 pythonw 下 sys.stdout 为 None。"""
