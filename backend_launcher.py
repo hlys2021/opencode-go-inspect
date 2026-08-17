@@ -19,7 +19,11 @@ def _python_console_executable() -> str:
 def _hidden_options() -> dict:
     if os.name != "nt":
         return {}
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    flags = (
+        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+    )
     return {"creationflags": flags}
 
 
