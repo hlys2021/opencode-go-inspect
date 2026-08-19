@@ -481,6 +481,32 @@ def get_recent_alerts(limit: int = 20) -> List[Dict[str, Any]]:
     conn.close()
     return [dict(r) for r in rows]
 
+def get_active_alerts() -> List[Dict[str, Any]]:
+    """获取当前周期内有效的告警（日告警仅限当天，月告警仅限当月）"""
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    month_str = now.strftime("%Y-%m")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM alert_logs ORDER BY id DESC LIMIT 20")
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    active = []
+    for r in rows:
+        created = r.get("created_at") or ""
+        alert_type = r.get("alert_type") or ""
+        if "daily" in alert_type:
+            if created.startswith(today_str):
+                active.append(r)
+        elif "monthly" in alert_type:
+            if created.startswith(month_str):
+                active.append(r)
+        else:
+            active.append(r)
+    return active[:5]
+
 if __name__ == "__main__":
     init_db()
     print("SQLite 数据库初始化与字段修复完成:", DB_PATH)

@@ -127,7 +127,7 @@ def get_usage_data(page: int = 1, page_size: int = 20):
     recent_logs = database.get_recent_usage(limit=page_size, offset=(page - 1) * page_size)
     total_count = database.get_usage_count()
     config = alert_engine.load_config()
-    alerts = database.get_recent_alerts(limit=5)
+    alerts = database.get_active_alerts()
     go_usage = database.get_latest_go_usage_snapshot()
     go_usage_status = crawler.get_crawler_status()
     return {
